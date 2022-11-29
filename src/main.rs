@@ -1,12 +1,13 @@
-mod unconditional;
+mod jump;
 
+use std::collections::HashMap;
 use std::io::Write;
 use std::{collections::HashSet, fmt::Display};
 
 use object::{Object, ObjectSection};
 
-use capstone::{Arch, Insn, InsnGroupType, Mode, NO_EXTRA_MODE};
-use unconditional::is_unconditional_jump;
+use capstone::{Arch, Insn, Mode, NO_EXTRA_MODE};
+use jump::get_exit_jump;
 
 fn main() {
     let bin_file = std::fs::read("calculator").unwrap();
@@ -29,69 +30,35 @@ fn main() {
         .unwrap_or_else(|e| panic!("Failed to disassemble given code: {}", e));
 
     let mut leaders = HashSet::new();
+    let mut jumps: HashMap<u64, ExitJump> = HashMap::new(); // jump_address -> ExitJump
 
-    let mut rel_file = std::fs::File::create("relative.txt").expect("Unable to create file");
-
-    //for iteration to find all leaders
+    // iteration to find all leaders and exit jumps
     for (index, insn) in insns.iter().enumerate() {
         let insn_detail = cs.insn_detail(insn).unwrap();
-        let insn_group_ids = insn_detail.groups();
 
-        // check if the instruction is a jump and check its JumpType
-        let mut is_jump = false;
-        let mut is_relative = false;
-        let mut jump_type: Option<JumpType> = None;
+        let exit_jump = get_exit_jump(insn, &insn_detail, arch_mode.arch);
 
-        for id in insn_group_ids {
-            let id = id.0 as u32;
+        // if the instruction is a jump, add the jump target address and the next instruction address to the leaders
+        // Then add the jump instruction to the jumps map
+        if let Some(exit_jump) = exit_jump {
+            jumps.insert(insn.address(), exit_jump.clone());
 
-            if id == InsnGroupType::CS_GRP_CALL
-                || id == InsnGroupType::CS_GRP_INT
-                || id == InsnGroupType::CS_GRP_JUMP
-                || id == InsnGroupType::CS_GRP_RET
-                || id == InsnGroupType::CS_GRP_IRET
-            {
-                is_jump = true;
-            } else if id == InsnGroupType::CS_GRP_BRANCH_RELATIVE {
-                is_relative = true;
-            }
-        }
-
-        if is_jump {
-            if let Some(operands) = insn.op_str() {
-                let operands = operands.split(',').collect::<Vec<&str>>();
-                let last_operand = operands.last().unwrap().trim();
-                if last_operand.starts_with("#0x") {
-                    let last_operand =
-                        u64::from_str_radix(last_operand.trim_start_matches("#0x"), 16).unwrap();
-                    if is_relative {
-                        jump_type = Some(JumpType::Relative(last_operand));
-                    } else {
-                        jump_type = Some(JumpType::Absolute(last_operand));
-                    }
-                } else {
-                    jump_type = Some(JumpType::Indirect);
-                }
-            }
-        }
-
-
-        // check if the instruction is a leader and inserting the target address into the leaders Hash-set
-        if let Some(jump) = jump_type {
             // insert next instruction as leader
             if index != insns.len() - 1 {
                 leaders.insert(insn.address() + insn.bytes().len() as u64);
             }
 
-            match jump {
-                JumpType::Absolute(addr) => {
-                    leaders.insert(addr);
+            match exit_jump {
+                ExitJump::UnconditionalAbsolute(target)
+                | ExitJump::UnconditionalRelative(target) => {
+                    leaders.insert(target);
                 }
-                JumpType::Relative(offset) => {
-                    writeln!(rel_file, "0x{:x}", insn.address() + offset).unwrap();
-                    leaders.insert(insn.address() + offset);
+                ExitJump::ConditionalAbsolute { taken, .. }
+                | ExitJump::ConditionalRelative { taken, .. } => {
+                    leaders.insert(taken);
+                    // not taken is the next instruction, so it is already inserted
                 }
-                JumpType::Indirect => {}
+                ExitJump::Indirect => {}
             }
         }
     }
@@ -108,33 +75,10 @@ fn main() {
         // push the instruction to the current block
         current_block.add_instruction(insn);
 
-        //added
-        let insn_detail = cs.insn_detail(insn).unwrap();
-        let insn_group_ids = insn_detail.groups();
-        let mut is_jump = false;
-
-        for id in insn_group_ids {
-            let id = id.0 as u32;
-
-            if id == InsnGroupType::CS_GRP_CALL
-                || id == InsnGroupType::CS_GRP_INT
-                || id == InsnGroupType::CS_GRP_JUMP
-                || id == InsnGroupType::CS_GRP_RET
-                || id == InsnGroupType::CS_GRP_IRET
-                || id == InsnGroupType::CS_GRP_BRANCH_RELATIVE
-            {
-                is_jump = true;
-            } 
-        }
-        // end added
-
         // if the next instruction is a leader, push the current block to the list of blocks
         if leaders.contains(&next_insn.address()) {
-            // set the exit jump type of the current block
-            if is_unconditional_jump(insn, arch_mode.arch) {
-                current_block.set_exit_jump(ExitJump::Unconditional);
-            } else  if is_jump {  //modified
-                current_block.set_exit_jump(ExitJump::Conditional);
+            if let Some(exit_jump) = jumps.get(&insn.address()) {
+                current_block.set_exit_jump(exit_jump.clone());
             }
 
             blocks.push(current_block.clone());
@@ -157,16 +101,12 @@ fn main() {
 }
 
 #[derive(Debug, Clone)]
-enum JumpType {
-    Relative(u64), // pc + offset
-    Absolute(u64), // address
-    Indirect,      // register
-}
-
-#[derive(Debug, Clone)]
 pub enum ExitJump {
-    Conditional,
-    Unconditional,
+    ConditionalRelative { taken: u64, not_taken: u64 },
+    UnconditionalRelative(u64),
+    ConditionalAbsolute { taken: u64, not_taken: u64 },
+    UnconditionalAbsolute(u64),
+    Indirect,
 }
 
 #[derive(Debug, Clone, Default)]
