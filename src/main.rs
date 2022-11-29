@@ -32,7 +32,7 @@ fn main() {
 
     let mut rel_file = std::fs::File::create("relative.txt").expect("Unable to create file");
 
-    // first iteration to find all leaders
+    //for iteration to find all leaders
     for (index, insn) in insns.iter().enumerate() {
         let insn_detail = cs.insn_detail(insn).unwrap();
         let insn_group_ids = insn_detail.groups();
@@ -75,6 +75,8 @@ fn main() {
             }
         }
 
+
+        // check if the instruction is a leader and inserting the target address into the leaders Hash-set
         if let Some(jump) = jump_type {
             // insert next instruction as leader
             if index != insns.len() - 1 {
@@ -106,14 +108,35 @@ fn main() {
         // push the instruction to the current block
         current_block.add_instruction(insn);
 
+        //added
+        let insn_detail = cs.insn_detail(insn).unwrap();
+        let insn_group_ids = insn_detail.groups();
+        let mut is_jump = false;
+
+        for id in insn_group_ids {
+            let id = id.0 as u32;
+
+            if id == InsnGroupType::CS_GRP_CALL
+                || id == InsnGroupType::CS_GRP_INT
+                || id == InsnGroupType::CS_GRP_JUMP
+                || id == InsnGroupType::CS_GRP_RET
+                || id == InsnGroupType::CS_GRP_IRET
+                || id == InsnGroupType::CS_GRP_BRANCH_RELATIVE
+            {
+                is_jump = true;
+            } 
+        }
+        // end added
+
         // if the next instruction is a leader, push the current block to the list of blocks
         if leaders.contains(&next_insn.address()) {
             // set the exit jump type of the current block
             if is_unconditional_jump(insn, arch_mode.arch) {
                 current_block.set_exit_jump(ExitJump::Unconditional);
-            } else {
+            } else  if is_jump {  //modified
                 current_block.set_exit_jump(ExitJump::Conditional);
             }
+
             blocks.push(current_block.clone());
             current_block = Block::new();
         }
