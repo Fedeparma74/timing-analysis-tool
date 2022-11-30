@@ -12,7 +12,7 @@ use capstone::{Arch, Insn, Mode, NO_EXTRA_MODE};
 use jump::get_exit_jump;
 
 fn main() {
-    let bin_file = std::fs::read("calculator.o").unwrap();
+    let bin_file = std::fs::read("prova.o").unwrap();
     let obj_file = object::File::parse(bin_file.as_slice()).unwrap();
     let arch = obj_file.architecture();
 
@@ -87,7 +87,7 @@ fn main() {
             }
 
             blocks.push(current_block.clone());
-            current_block = Block::new(&next_insn);
+            current_block = Block::new(next_insn);
         } else {
             // push the instruction to the current block
             current_block.add_instruction(next_insn);
@@ -104,8 +104,7 @@ fn main() {
 
     let edges = blocks
         .iter()
-        .map(|block| block.get_edges())
-        .flatten()
+        .flat_map(|block| block.get_edges())
         .collect::<Vec<_>>();
 
     let mut dot_file = std::fs::File::create("graph.dot").expect("Unable to create file");
