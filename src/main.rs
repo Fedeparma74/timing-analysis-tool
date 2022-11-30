@@ -16,23 +16,28 @@ fn main() {
     let obj_file = object::File::parse(bin_file.as_slice()).unwrap();
     let arch = obj_file.architecture();
 
-    // get code section from the binary
-    let code = obj_file
-        .section_by_name(".text")
-        .expect(".text section not available")
-        .data()
-        .unwrap();
+    let mut text_data = Vec::new();
+    // print file sections
+    for section in obj_file.sections() {
+        // join all the sections .text in one
+        println!("Section: {}", section.name().unwrap());
+        if section.name().unwrap().contains("text") {
+            text_data.extend_from_slice(section.data().unwrap());
+        }
+    }
 
-    println!("{:?}", code.len());
+    println!("Text section size: {}", text_data.len());
 
     let arch_mode = ArchMode::from(arch);
+
+    println!("{:?}", arch_mode);
 
     let mut cs = capstone::Capstone::new_raw(arch_mode.arch, arch_mode.mode, NO_EXTRA_MODE, None)
         .unwrap_or_else(|e| panic!("Failed to create Capstone handle: {}", e));
     cs.set_detail(true).unwrap();
 
     let insns = cs
-        .disasm_all(code, 0x1000)
+        .disasm_all(&text_data, 0x1000)
         .unwrap_or_else(|e| panic!("Failed to disassemble given code: {}", e));
 
     println!("{}", insns.len());
@@ -87,7 +92,7 @@ fn main() {
             }
 
             blocks.push(current_block.clone());
-            current_block = Block::new(&next_insn);
+            current_block = Block::new(next_insn);
         } else {
             // push the instruction to the current block
             current_block.add_instruction(next_insn);
@@ -104,8 +109,7 @@ fn main() {
 
     let edges = blocks
         .iter()
-        .map(|block| block.get_edges())
-        .flatten()
+        .flat_map(|block| block.get_edges())
         .collect::<Vec<_>>();
 
     let mut dot_file = std::fs::File::create("graph.dot").expect("Unable to create file");
@@ -193,6 +197,7 @@ impl Display for Block<'_> {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct ArchMode {
     pub arch: Arch,
     pub mode: Mode,

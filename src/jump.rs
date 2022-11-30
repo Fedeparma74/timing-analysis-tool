@@ -57,9 +57,10 @@ pub fn get_exit_jump(insn: &Insn, insn_detail: &InsnDetail, arch: Arch) -> Optio
         let operands = operands.split(',').collect::<Vec<&str>>();
         let last_operand = operands.last().unwrap().trim();
 
-        if last_operand.starts_with("#0x") {
+        if last_operand.contains("0x") {
             let last_operand =
-                u64::from_str_radix(last_operand.trim_start_matches("#0x"), 16).unwrap();
+                u64::from_str_radix(last_operand.split("0x").collect::<Vec<&str>>()[1], 16)
+                    .unwrap();
 
             match (is_relative, is_unconditional) {
                 (true, true) => Some(ExitJump::UnconditionalRelative(
