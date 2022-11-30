@@ -35,10 +35,7 @@ pub fn get_exit_jump(insn: &Insn, insn_detail: &InsnDetail, arch: Arch) -> Optio
             //     "j" | "jal" | "jr" | "jalr" => true,
             //     _ => false,
             // },
-            // Arch::X86 => match op {
-            //     "jmp" | "ret" | "call" => true,
-            //     _ => false,
-            // },
+            Arch::X86 => matches!(op, "jmp" | "call" | "ret"),
             // Arch::PPC => match op {
             //     "b" | "bl" | "blr" | "bctr" | "bctrl" => true,
             //     _ => false,

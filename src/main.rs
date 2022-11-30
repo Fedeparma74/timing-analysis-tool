@@ -1,23 +1,29 @@
+mod graph;
 mod jump;
 
 use std::collections::HashMap;
 use std::io::Write;
 use std::{collections::HashSet, fmt::Display};
 
+use graph::Edges;
 use object::{Object, ObjectSection};
 
 use capstone::{Arch, Insn, Mode, NO_EXTRA_MODE};
 use jump::get_exit_jump;
 
 fn main() {
-    let bin_file = std::fs::read("calculator").unwrap();
+    let bin_file = std::fs::read("calculator.o").unwrap();
     let obj_file = object::File::parse(bin_file.as_slice()).unwrap();
     let arch = obj_file.architecture();
+
+    // get code section from the binary
     let code = obj_file
         .section_by_name(".text")
         .expect(".text section not available")
         .data()
         .unwrap();
+
+    println!("{:?}", code.len());
 
     let arch_mode = ArchMode::from(arch);
 
@@ -28,6 +34,8 @@ fn main() {
     let insns = cs
         .disasm_all(code, 0x1000)
         .unwrap_or_else(|e| panic!("Failed to disassemble given code: {}", e));
+
+    println!("{}", insns.len());
 
     let mut leaders = HashSet::new();
     let mut jumps: HashMap<u64, ExitJump> = HashMap::new(); // jump_address -> ExitJump
@@ -65,15 +73,12 @@ fn main() {
 
     // iterate through all instructions and create the basic blocks
     let mut blocks: Vec<Block> = Vec::new();
-    let mut current_block: Block = Block::new();
+    let mut current_block: Block = Block::new(&insns[0]);
 
     // for each window of 2 instructions
     insns.windows(2).enumerate().for_each(|(index, window)| {
         let insn = &window[0];
         let next_insn = &window[1];
-
-        // push the instruction to the current block
-        current_block.add_instruction(insn);
 
         // if the next instruction is a leader, push the current block to the list of blocks
         if leaders.contains(&next_insn.address()) {
@@ -82,7 +87,10 @@ fn main() {
             }
 
             blocks.push(current_block.clone());
-            current_block = Block::new();
+            current_block = Block::new(&next_insn);
+        } else {
+            // push the instruction to the current block
+            current_block.add_instruction(next_insn);
         }
 
         // last instruction pair -> add last instruction to block and push block (exit_jump is None)
@@ -94,6 +102,17 @@ fn main() {
 
     let mut file = std::fs::File::create("output.txt").expect("Unable to create file");
 
+    let edges = blocks
+        .iter()
+        .map(|block| block.get_edges())
+        .flatten()
+        .collect::<Vec<_>>();
+
+    let mut dot_file = std::fs::File::create("graph.dot").expect("Unable to create file");
+
+    dot::render(&Edges(edges), &mut dot_file).expect("Unable to write dot file");
+
+    // create dot graph file
     for block in blocks {
         // write output to txt file
         writeln!(file, "Block:\n{}", block).unwrap();
@@ -112,12 +131,17 @@ pub enum ExitJump {
 #[derive(Debug, Clone, Default)]
 pub struct Block<'a> {
     pub insns: Vec<&'a Insn<'a>>,
+    pub leader: u64,
     pub exit_jump: Option<ExitJump>,
 }
 
 impl<'a> Block<'a> {
-    pub fn new() -> Self {
-        Self::default()
+    pub fn new(insn: &'a Insn<'a>) -> Self {
+        Self {
+            insns: vec![insn],
+            leader: insn.address(),
+            exit_jump: None,
+        }
     }
 
     pub fn add_instruction(&mut self, insn: &'a Insn<'a>) {
@@ -130,6 +154,32 @@ impl<'a> Block<'a> {
 
     pub fn set_exit_jump(&mut self, exit_jump: ExitJump) {
         self.exit_jump = Some(exit_jump);
+    }
+
+    pub fn get_edges(&self) -> Vec<(u64, u64)> {
+        let mut edges = vec![];
+
+        if let Some(exit_jump) = &self.exit_jump {
+            match exit_jump {
+                ExitJump::ConditionalRelative { taken, not_taken } => {
+                    edges.push((self.leader, *taken));
+                    edges.push((self.leader, *not_taken));
+                }
+                ExitJump::UnconditionalRelative(target) => {
+                    edges.push((self.leader, *target));
+                }
+                ExitJump::ConditionalAbsolute { taken, not_taken } => {
+                    edges.push((self.leader, *taken));
+                    edges.push((self.leader, *not_taken));
+                }
+                ExitJump::UnconditionalAbsolute(target) => {
+                    edges.push((self.leader, *target));
+                }
+                ExitJump::Indirect => {}
+            }
+        }
+
+        edges
     }
 }
 
