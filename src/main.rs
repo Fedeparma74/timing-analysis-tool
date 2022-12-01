@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::io::Write;
 use std::{collections::HashSet, fmt::Display};
 
-use graph::Edges;
+use graph::Graph;
 use object::{Object, ObjectSection};
 
 use capstone::{Arch, Insn, Mode, NO_EXTRA_MODE};
@@ -114,7 +114,14 @@ fn main() {
 
     let mut dot_file = std::fs::File::create("graph.dot").expect("Unable to create file");
 
-    dot::render(&Edges(edges), &mut dot_file).expect("Unable to write dot file");
+    dot::render(
+        &Graph {
+            nodes: blocks.clone(),
+            edges,
+        },
+        &mut dot_file,
+    )
+    .expect("Unable to write dot file");
 
     // create dot graph file
     for block in blocks {
@@ -192,7 +199,7 @@ impl Display for Block<'_> {
         for insn in self.insns.iter() {
             writeln!(f, "{}", insn)?;
         }
-        writeln!(f, "Exit jump: {:?}", self.exit_jump)?;
+        // writeln!(f, "Exit jump: {:?}", self.exit_jump)?;
         Ok(())
     }
 }
