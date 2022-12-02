@@ -1,7 +1,7 @@
 mod graph;
 mod jump;
 
-use std::collections::HashMap;
+use std::collections::{hash_map, HashMap};
 use std::io::Write;
 use std::{collections::HashSet, fmt::Display};
 
@@ -44,7 +44,7 @@ fn main() {
 
     let mut leaders = HashSet::new();
     let mut jumps: HashMap<u64, ExitJump> = HashMap::new(); // jump_address -> ExitJump
-    let mut lastcalls = HashMap::<u64, u64>::new(); // call_target_address -> return_address (ret)
+    let mut lastcalls = HashMap::<u64, Vec<u64>>::new(); // call_target_address -> return_addresses (ret)
 
     // iteration to find all leaders and exit jumps
     insns.windows(2).for_each(|window| {
@@ -81,7 +81,14 @@ fn main() {
                 ExitJump::Call(target) => {
                     if next_insn.address() != target {
                         leaders.insert(target);
-                        lastcalls.insert(target, next_insn.address());
+                        if let hash_map::Entry::Vacant(e) = lastcalls.entry(target) {
+                            e.insert(vec![next_insn.address()]);
+                        } else {
+                            lastcalls
+                                .get_mut(&target)
+                                .unwrap()
+                                .push(next_insn.address());
+                        }
                     } else {
                         leaders.remove(&next_insn.address());
                         jumps.remove(&insn.address());
@@ -106,7 +113,7 @@ fn main() {
                 if let ExitJump::Ret(_) = exit_jump {
                     if lastcalls.contains_key(&current_block.leader) {
                         current_block.set_exit_jump(ExitJump::Ret(
-                            lastcalls.get(&current_block.leader).copied(),
+                            lastcalls.get(&current_block.leader).cloned(),
                         ));
                     }
                 } else {
@@ -160,7 +167,7 @@ pub enum ExitJump {
     ConditionalAbsolute { taken: u64, not_taken: u64 },
     UnconditionalAbsolute(u64),
     Indirect,
-    Ret(Option<u64>),
+    Ret(Option<Vec<u64>>),
     Call(u64),
 }
 
@@ -190,7 +197,15 @@ impl Display for ExitJump {
             ExitJump::Indirect => write!(f, "Indirect"),
             ExitJump::Ret(target) => {
                 if let Some(target) = target {
-                    write!(f, "Ret {{ target: 0x{:x} }}", target)
+                    write!(
+                        f,
+                        "Ret {{ targets: {} }}",
+                        target
+                            .iter()
+                            .map(|x| format!("{:x}", x))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
                 } else {
                     write!(f, "Ret {{ target: None }}")
                 }
@@ -250,7 +265,9 @@ impl<'a> Block<'a> {
                 ExitJump::Indirect => {}
                 ExitJump::Ret(target) => {
                     if let Some(target) = target {
-                        edges.push((self.leader, *target));
+                        for target in target {
+                            edges.push((self.leader, *target));
+                        }
                     }
                 }
                 ExitJump::Call(target) => {
