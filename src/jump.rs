@@ -81,10 +81,12 @@ pub fn get_exit_jump(
 
             match (is_relative, is_unconditional) {
                 (true, true) => Some(ExitJump::UnconditionalRelative(
-                    insn.address() + last_operand,
+                    // insn.address() + last_operand,
+                    last_operand,
                 )),
                 (true, false) => Some(ExitJump::ConditionalRelative {
-                    taken: insn.address() + last_operand,
+                    // taken: insn.address() + last_operand,
+                    taken: last_operand,
                     not_taken: next_insn.address(),
                 }),
                 (false, true) => Some(ExitJump::UnconditionalAbsolute(last_operand)),
