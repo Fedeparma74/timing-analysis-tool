@@ -26,7 +26,7 @@ impl<'a> Labeller<'a, Node<'_>, Edge> for Graph<'_> {
 
         for insn in &n.insns {
             label.push_str(&format!(
-                "0x{:x}: {}",
+                "0x{:x}: {}\n",
                 insn.address(),
                 insn.mnemonic().unwrap()
             ));
