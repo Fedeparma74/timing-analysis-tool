@@ -1,11 +1,11 @@
 mod graph;
 mod jump;
 
-use std::collections::HashMap;
+use std::collections::{hash_map, HashMap};
 use std::io::Write;
 use std::{collections::HashSet, fmt::Display};
 
-use graph::Edges;
+use graph::Graph;
 use object::{Object, ObjectSection};
 
 use capstone::{Arch, Insn, Mode, NO_EXTRA_MODE};
@@ -44,12 +44,16 @@ fn main() {
 
     let mut leaders = HashSet::new();
     let mut jumps: HashMap<u64, ExitJump> = HashMap::new(); // jump_address -> ExitJump
+    let mut lastcalls = HashMap::<u64, Vec<u64>>::new(); // call_target_address -> return_addresses (ret)
 
     // iteration to find all leaders and exit jumps
-    for (index, insn) in insns.iter().enumerate() {
+    insns.windows(2).for_each(|window| {
+        let insn = &window[0];
+        let next_insn = &window[1];
+
         let insn_detail = cs.insn_detail(insn).unwrap();
 
-        let exit_jump = get_exit_jump(insn, &insn_detail, arch_mode.arch);
+        let exit_jump = get_exit_jump(insn, next_insn, &insn_detail, arch_mode.arch);
 
         // if the instruction is a jump, add the jump target address and the next instruction address to the leaders
         // Then add the jump instruction to the jumps map
@@ -57,9 +61,7 @@ fn main() {
             jumps.insert(insn.address(), exit_jump.clone());
 
             // insert next instruction as leader
-            if index != insns.len() - 1 {
-                leaders.insert(insn.address() + insn.bytes().len() as u64);
-            }
+            leaders.insert(next_insn.address());
 
             match exit_jump {
                 ExitJump::UnconditionalAbsolute(target)
@@ -71,10 +73,30 @@ fn main() {
                     leaders.insert(taken);
                     // not taken is the next instruction, so it is already inserted
                 }
-                ExitJump::Indirect => {}
+                ExitJump::Indirect => {
+                    jumps.remove(&insn.address());
+                    leaders.remove(&next_insn.address());
+                }
+                ExitJump::Ret(_) => {}
+                ExitJump::Call(target) => {
+                    if next_insn.address() != target {
+                        leaders.insert(target);
+                        if let hash_map::Entry::Vacant(e) = lastcalls.entry(target) {
+                            e.insert(vec![next_insn.address()]);
+                        } else {
+                            lastcalls
+                                .get_mut(&target)
+                                .unwrap()
+                                .push(next_insn.address());
+                        }
+                    } else {
+                        leaders.remove(&next_insn.address());
+                        jumps.remove(&insn.address());
+                    }
+                }
             }
         }
-    }
+    });
 
     // iterate through all instructions and create the basic blocks
     let mut blocks: Vec<Block> = Vec::new();
@@ -88,7 +110,15 @@ fn main() {
         // if the next instruction is a leader, push the current block to the list of blocks
         if leaders.contains(&next_insn.address()) {
             if let Some(exit_jump) = jumps.get(&insn.address()) {
-                current_block.set_exit_jump(exit_jump.clone());
+                if let ExitJump::Ret(_) = exit_jump {
+                    if lastcalls.contains_key(&current_block.leader) {
+                        current_block.set_exit_jump(ExitJump::Ret(
+                            lastcalls.get(&current_block.leader).cloned(),
+                        ));
+                    }
+                } else {
+                    current_block.set_exit_jump(exit_jump.clone());
+                }
             }
 
             blocks.push(current_block.clone());
@@ -114,7 +144,14 @@ fn main() {
 
     let mut dot_file = std::fs::File::create("graph.dot").expect("Unable to create file");
 
-    dot::render(&Edges(edges), &mut dot_file).expect("Unable to write dot file");
+    dot::render(
+        &Graph {
+            nodes: blocks.clone(),
+            edges,
+        },
+        &mut dot_file,
+    )
+    .expect("Unable to write dot file");
 
     // create dot graph file
     for block in blocks {
@@ -130,6 +167,52 @@ pub enum ExitJump {
     ConditionalAbsolute { taken: u64, not_taken: u64 },
     UnconditionalAbsolute(u64),
     Indirect,
+    Ret(Option<Vec<u64>>),
+    Call(u64),
+}
+
+impl Display for ExitJump {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ExitJump::ConditionalRelative { taken, not_taken } => {
+                write!(
+                    f,
+                    "ConditionalRelative {{ taken: 0x{:x}, not_taken: 0x{:x} }}",
+                    taken, not_taken
+                )
+            }
+            ExitJump::UnconditionalRelative(target) => {
+                write!(f, "UnconditionalRelative {{ target: 0x{:x} }}", target)
+            }
+            ExitJump::ConditionalAbsolute { taken, not_taken } => {
+                write!(
+                    f,
+                    "ConditionalAbsolute {{ taken: 0x{:x}, not_taken: 0x{:x} }}",
+                    taken, not_taken
+                )
+            }
+            ExitJump::UnconditionalAbsolute(target) => {
+                write!(f, "UnconditionalAbsolute {{ target: 0x{:x} }}", target)
+            }
+            ExitJump::Indirect => write!(f, "Indirect"),
+            ExitJump::Ret(target) => {
+                if let Some(target) = target {
+                    write!(
+                        f,
+                        "Ret {{ targets: {} }}",
+                        target
+                            .iter()
+                            .map(|x| format!("{:x}", x))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )
+                } else {
+                    write!(f, "Ret {{ target: None }}")
+                }
+            }
+            ExitJump::Call(target) => write!(f, "Call {{ target: 0x{:x} }}", target),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Default)]
@@ -180,6 +263,16 @@ impl<'a> Block<'a> {
                     edges.push((self.leader, *target));
                 }
                 ExitJump::Indirect => {}
+                ExitJump::Ret(target) => {
+                    if let Some(target) = target {
+                        for target in target {
+                            edges.push((self.leader, *target));
+                        }
+                    }
+                }
+                ExitJump::Call(target) => {
+                    edges.push((self.leader, *target));
+                }
             }
         }
 
@@ -192,7 +285,11 @@ impl Display for Block<'_> {
         for insn in self.insns.iter() {
             writeln!(f, "{}", insn)?;
         }
-        writeln!(f, "Exit jump: {:?}", self.exit_jump)?;
+        if let Some(exit_jump) = &self.exit_jump {
+            writeln!(f, "Exit jump: {}", exit_jump)?;
+        } else {
+            writeln!(f, "Exit jump: None")?;
+        }
         Ok(())
     }
 }
