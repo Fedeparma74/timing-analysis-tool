@@ -5,11 +5,12 @@ use std::collections::{hash_map, HashMap};
 use std::io::Write;
 use std::{collections::HashSet, fmt::Display};
 
-use graph::Graph;
-use object::{Object, ObjectSection};
-
 use capstone::{Arch, Insn, Mode, NO_EXTRA_MODE};
+use graph::Graph;
 use jump::get_exit_jump;
+use object::{Object, ObjectSection};
+use petgraph::algo::tarjan_scc;
+use petgraph::visit::{GraphBase, GraphRef, IntoNodeIdentifiers};
 
 fn main() {
     let bin_file = std::fs::read("prova.o").unwrap();
@@ -44,7 +45,7 @@ fn main() {
 
     let mut leaders = HashSet::new();
     let mut jumps: HashMap<u64, ExitJump> = HashMap::new(); // jump_address -> ExitJump
-    let mut lastcalls = HashMap::<u64, Vec<u64>>::new(); // call_target_address -> return_addresses (ret)
+    let mut call_map = HashMap::<u64, Vec<u64>>::new(); // call_target_address -> return_addresses (ret)
 
     // iteration to find all leaders and exit jumps
     insns.windows(2).for_each(|window| {
@@ -81,19 +82,17 @@ fn main() {
                 ExitJump::Call(target) => {
                     if next_insn.address() != target {
                         leaders.insert(target);
-                        if let hash_map::Entry::Vacant(e) = lastcalls.entry(target) {
+                        if let hash_map::Entry::Vacant(e) = call_map.entry(target) {
                             e.insert(vec![next_insn.address()]);
                         } else {
-                            lastcalls
-                                .get_mut(&target)
-                                .unwrap()
-                                .push(next_insn.address());
+                            call_map.get_mut(&target).unwrap().push(next_insn.address());
                         }
                     } else {
                         leaders.remove(&next_insn.address());
                         jumps.remove(&insn.address());
                     }
                 }
+                ExitJump::Next(_) => {}
             }
         }
     });
@@ -111,14 +110,16 @@ fn main() {
         if leaders.contains(&next_insn.address()) {
             if let Some(exit_jump) = jumps.get(&insn.address()) {
                 if let ExitJump::Ret(_) = exit_jump {
-                    if lastcalls.contains_key(&current_block.leader) {
+                    if call_map.contains_key(&current_block.leader) {
                         current_block.set_exit_jump(ExitJump::Ret(
-                            lastcalls.get(&current_block.leader).cloned(),
+                            call_map.get(&current_block.leader).cloned(),
                         ));
                     }
                 } else {
                     current_block.set_exit_jump(exit_jump.clone());
                 }
+            } else {
+                current_block.set_exit_jump(ExitJump::Next(next_insn.address()));
             }
 
             blocks.push(current_block.clone());
@@ -154,10 +155,38 @@ fn main() {
     .expect("Unable to write dot file");
 
     // create dot graph file
-    for block in blocks {
+    for block in &blocks {
         // write output to txt file
         writeln!(file, "Block:\n{}", block).unwrap();
     }
+
+    // find strongly connected components (cycles)
+
+    // // find cycles in the graph
+    // for block in blocks {
+    //     let mut graph = Graph::new();
+    //     let mut nodes = HashMap::new();
+
+    //     for edge in block.get_edges() {
+    //         let source = nodes.entry(edge.source).or_insert_with(|| graph.add_node(edge.source));
+    //         let target = nodes.entry(edge.target).or_insert_with(|| graph.add_node(edge.target));
+    //         graph.add_edge(*source, *target, ());
+    //     }
+
+    //     let cycles = petgraph::algo::kosaraju_scc(&graph);
+
+    //     if !cycles.is_empty() {
+    //         println!("Cycles found in block: {}", block.leader);
+    //         for cycle in cycles {
+    //             println!("Cycle: {:?}", cycle);
+    //         }
+    //     }
+    // }
+}
+
+impl GraphBase for Graph<'_> {
+    type NodeId = usize;
+    type EdgeId = usize;
 }
 
 #[derive(Debug, Clone)]
@@ -169,6 +198,7 @@ pub enum ExitJump {
     Indirect,
     Ret(Option<Vec<u64>>),
     Call(u64),
+    Next(u64),
 }
 
 impl Display for ExitJump {
@@ -211,6 +241,7 @@ impl Display for ExitJump {
                 }
             }
             ExitJump::Call(target) => write!(f, "Call {{ target: 0x{:x} }}", target),
+            ExitJump::Next(target) => write!(f, "Next {{ target: 0x{:x} }}", target),
         }
     }
 }
@@ -271,6 +302,9 @@ impl<'a> Block<'a> {
                     }
                 }
                 ExitJump::Call(target) => {
+                    edges.push((self.leader, *target));
+                }
+                ExitJump::Next(target) => {
                     edges.push((self.leader, *target));
                 }
             }
