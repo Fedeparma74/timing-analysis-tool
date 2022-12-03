@@ -7,6 +7,7 @@ use crate::Block;
 type Node<'a> = Block<'a>;
 type Edge = (u64, u64);
 
+#[derive(Debug, Clone)]
 pub struct Graph<'a> {
     pub nodes: Vec<Node<'a>>,
     pub edges: Vec<Edge>,
