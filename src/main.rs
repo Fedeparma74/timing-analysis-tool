@@ -7,11 +7,14 @@ use std::{collections::HashSet, fmt::Display};
 use capstone::{Arch, Insn, Mode, NO_EXTRA_MODE};
 use jump::get_exit_jump;
 use object::{Object, ObjectSection};
-use petgraph::algo::{condensation, tarjan_scc};
+use petgraph::algo::{bellman_ford, condensation};
 use petgraph::dot::{Config, Dot};
 use petgraph::graph::NodeIndex;
-use petgraph::visit::{GraphBase, GraphRef, IntoNodeIdentifiers};
-use petgraph::{Directed, Graph};
+use petgraph::visit::EdgeRef;
+use petgraph::Direction::{Incoming, Outgoing};
+use petgraph::Graph;
+
+const MAX_CYCLES: u32 = 1;
 
 fn main() {
     let bin_file = std::fs::read("cyclic.o").unwrap();
@@ -103,10 +106,9 @@ fn main() {
     });
 
     // iterate through all instructions and create the basic blocks
-    // let mut blocks: Vec<Block> = Vec::new();
     let mut current_block: Block = Block::new(&instructions[0]);
 
-    let mut graph = Graph::<Block, u8>::new();
+    let mut graph = Graph::<Block, f32>::new();
 
     // for each window of 2 instructions
     instructions
@@ -132,14 +134,8 @@ fn main() {
                     current_block.set_exit_jump(ExitJump::Next(next_insn.address()));
                 }
 
-                // blocks.push(current_block.clone());
                 let i = graph.add_node(current_block.clone());
                 node_index_map.insert(current_block.leader, i);
-                // let edges = current_block.get_edges();
-                // for edge in edges {
-                //     graph.add_edge((edge.0 as u32).into(), (edge.1 as u32).into(), 1);
-                //     // edge have weight 1 because the only weight we need is the block one
-                // }
                 current_block = Block::new(next_insn);
             } else {
                 // push the instruction to the current block
@@ -156,34 +152,21 @@ fn main() {
         });
 
     // add edges to the graph
-    for block_index in graph.node_indices() {
-        // println!("Block: {:?}", block_index);
-        let edges = graph.node_weight(block_index).unwrap().get_edges();
-        for edge in edges {
-            // println!("Edge: {:?}", edge);
+    for block in graph.clone().node_weights() {
+        for edge in block.get_edges() {
+            let next_block = graph
+                .node_weight(node_index_map.get(&edge.1).unwrap().clone())
+                .unwrap();
             graph.add_edge(
                 node_index_map.get(&edge.0).unwrap().clone(),
                 node_index_map.get(&edge.1).unwrap().clone(),
-                1,
+                next_block.get_latency(),
             );
         }
     }
 
     let mut file = std::fs::File::create("output.txt").expect("Unable to create file");
-
-    // let edges = blocks
-    //     .iter()
-    //     .flat_map(|block| block.get_edges())
-    //     .collect::<Vec<_>>();
-
     let mut dot_file = std::fs::File::create("graph.dot").expect("Unable to create file");
-
-    // let graph = Graph {
-    //     nodes: blocks.clone(),
-    //     edges,
-    // };
-
-    // dot::render(&graph, &mut dot_file).expect("Unable to write dot file");
 
     let blocks = graph.raw_nodes();
     for block in blocks {
@@ -197,78 +180,163 @@ fn main() {
         .write_all(digraph.to_string().as_bytes())
         .expect("Unable to write dot file");
 
-    // find strongly connected components (cycles)
-    // let scc = tarjan_scc(&graph);
+    let mut condensed_graph = condensation(graph.clone(), true);
+    let mut condensed_node_index_map = HashMap::<u64, NodeIndex<u32>>::new();
 
-    let mut condensed_graph = condensation(graph, false);
-
-    for node in condensed_graph.node_indices() {
-        let mut blocks = condensed_graph.node_weight_mut(node).unwrap();
-        if blocks.len() > 1 { // nodo condensato
-             // troviamo il percorso più lungo e ricostruiamo il blocco (worst case)
-             // blocks = vec![blocks.get_longest_path()];
+    for cyclic_node in condensed_graph.node_indices() {
+        let blocks = condensed_graph.node_weight(cyclic_node).unwrap();
+        //aggiungo i nodi
+        for block in blocks.iter() {
+            condensed_node_index_map.insert(block.leader, cyclic_node);
         }
     }
 
+    for cyclic_node in condensed_graph.node_indices() {
+        let blocks = condensed_graph.node_weight(cyclic_node).unwrap();
+        if blocks.len() > 1 {
+            // nodo condensato
+
+            //creo un nuovo grafo
+            let mut graph_cycle = Graph::<Block, f32>::new();
+            let mut cyclic_node_index_map = HashMap::<u64, NodeIndex<u32>>::new();
+
+            //aggiungo i nodi
+            for block in blocks.iter() {
+                let i = graph_cycle.add_node(block.clone());
+                cyclic_node_index_map.insert(block.leader, i);
+            }
+
+            //aggiungo gli archi
+            for block in graph_cycle.clone().node_weights() {
+                for edge in block.get_edges() {
+                    if let Some(target) = cyclic_node_index_map.get(&edge.1) {
+                        let next_block = graph_cycle.node_weight(target.clone()).unwrap();
+                        graph_cycle.add_edge(
+                            cyclic_node_index_map.get(&edge.0).unwrap().clone(),
+                            target.clone(),
+                            next_block.get_latency(),
+                        );
+                    }
+                }
+            }
+
+            // remove incoming edge of entry node
+            let entry_node_index = cyclic_node_index_map.get(&blocks[0].leader).unwrap();
+
+            println!("Entry node index: {:?}", entry_node_index);
+
+            for edge in graph_cycle
+                .clone()
+                .edges_directed(*entry_node_index, Incoming)
+            {
+                // let edge_index = graph_cycle.find_edge(edge.id(), edge.target()).unwrap();
+                graph_cycle.remove_edge(edge.id());
+            }
+
+            //stampa del cycle_graph
+            let digraph = Dot::with_config(&graph_cycle, &[Config::EdgeNoLabel]);
+
+            let mut dot_file =
+                std::fs::File::create("graph_cycle.dot").expect("Unable to create file");
+
+            dot_file
+                .write_all(digraph.to_string().as_bytes())
+                .expect("Unable to write dot file");
+
+            //cerco percorso critico
+            let path = bellman_ford(&graph_cycle, *entry_node_index).unwrap();
+            // println!("Path: {:#?}", path);
+
+            // entry node latency
+            let entry_node_latency = graph_cycle
+                .node_weight(*entry_node_index)
+                .unwrap()
+                .get_latency();
+
+            // calcolo latenza del percorso critico
+            let max_path_latency = path
+                .distances
+                .iter()
+                .filter(|x| x.is_finite())
+                .max_by(|a, b| a.partial_cmp(b).unwrap())
+                .unwrap()
+                .to_owned();
+
+            let cycle_latency = entry_node_latency + max_path_latency;
+
+            // get the outgoing block of the cyclic node (it's always only one because it's the exit condition of the cycle)
+            let outer_block_index = condensed_graph
+                .neighbors_directed(cyclic_node, Outgoing)
+                .next()
+                .unwrap();
+
+            let outer_block = &condensed_graph.node_weight(outer_block_index).unwrap()[0];
+
+            let exit_block_index = node_index_map.get(&outer_block.leader).unwrap().clone();
+            let exit_block = graph.node_weight(exit_block_index).unwrap();
+
+            let condensed_exit_block_index = condensed_node_index_map
+                .get(&exit_block.leader)
+                .unwrap()
+                .clone();
+
+            let direct_path_latency = cycle_latency
+                - bellman_ford(&graph_cycle, condensed_exit_block_index)
+                    .unwrap()
+                    .distances
+                    .iter()
+                    .filter(|x| x.is_finite())
+                    .max_by(|a, b| a.partial_cmp(b).unwrap())
+                    .unwrap()
+                    .to_owned();
+
+            let total_cycle_latency = direct_path_latency + MAX_CYCLES as f32 * cycle_latency;
+
+            // edit the outgoing edge latency of the condensed node
+            for edge in condensed_graph
+                .clone()
+                .edges_directed(cyclic_node, Incoming)
+            {
+                // let edge_index = graph_cycle.find_edge(edge.id(), edge.target()).unwrap();
+                condensed_graph.update_edge(edge.source(), edge.target(), total_cycle_latency);
+            }
+        }
+    }
+
+    // find all the entry nodes
+    let entry_nodes = condensed_graph
+        .node_indices()
+        .filter(|node| condensed_graph.edges_directed(*node, Incoming).count() == 0)
+        .collect::<Vec<_>>();
+
+    let mut wcet: f32 = 0.0;
+    for entry_node in entry_nodes {
+        let entry_node_latency = condensed_graph.node_weight(entry_node).unwrap()[0].get_latency();
+        println!("Entry node latency: {}", entry_node_latency);
+        let path = bellman_ford(&condensed_graph, entry_node).unwrap();
+        println!("Path: {:#?}", path);
+        let max_path_latency = path
+            .distances
+            .iter()
+            .filter(|x| x.is_finite())
+            .max_by(|a, b| a.partial_cmp(b).unwrap())
+            .unwrap()
+            .to_owned();
+
+        wcet = wcet.max(entry_node_latency + max_path_latency);
+    }
+
+    println!("WCET: {}", wcet);
+
     let mut dot_file = std::fs::File::create("condensed_graph.dot").expect("Unable to create file");
 
-    let digraph = Dot::with_config(&condensed_graph, &[Config::EdgeNoLabel]);
+    let digraph = Dot::with_config(&condensed_graph, &[Config::EdgeIndexLabel]);
 
-    println!("Condensed graph: {:?}", digraph);
+    // println!("Condensed graph: {:?}", digraph);
 
     dot_file
         .write_all(format!("{:?}", digraph).as_bytes())
         .expect("Unable to write dot file");
-
-    // println!("SCC: {:?}", scc);
-
-    // // collapse cycles
-    // let mut collapsed_graph = Graph::<Block, u8>::new();
-    // let mut collapsed_node_index_map = HashMap::new();
-    // let mut collapsed_scc = Vec::new();
-
-    // for scc in scc {
-    //     if scc.len() > 1 {
-    //         // create a new block with the leader of the first block in the scc
-    //         let mut new_block = Block::new(&graph.node_weight(scc[0]).unwrap().leader);
-    //         // add all instructions of the blocks in the scc to the new block
-    //         for block_index in scc {
-    //             new_block.add_instructions(&graph.node_weight(block_index).unwrap().instructions);
-    //         }
-    //         // add the new block to the collapsed graph
-    //         let i = collapsed_graph.add_node(new_block.clone());
-    //         collapsed_node_index_map.insert(new_block.leader, i);
-    //         // add the new block to the collapsed scc
-    //         collapsed_scc.push(vec![i]);
-    //     } else {
-    //         // add the block to the collapsed graph
-    //         let i = collapsed_graph.add_node(graph.node_weight(scc[0]).unwrap().clone());
-    //         collapsed_node_index_map.insert(graph.node_weight(scc[0]).unwrap().leader, i);
-    //         // add the block to the collapsed scc
-    //         collapsed_scc.push(vec![i]);
-    //     }
-    // }
-
-    // // find cycles in the graph
-    // for block in blocks {
-    //     let mut graph = Graph::new();
-    //     let mut nodes = HashMap::new();
-
-    //     for edge in block.get_edges() {
-    //         let source = nodes.entry(edge.source).or_insert_with(|| graph.add_node(edge.source));
-    //         let target = nodes.entry(edge.target).or_insert_with(|| graph.add_node(edge.target));
-    //         graph.add_edge(*source, *target, ());
-    //     }
-
-    //     let cycles = petgraph::algo::kosaraju_scc(&graph);
-
-    //     if !cycles.is_empty() {
-    //         println!("Cycles found in block: {}", block.leader);
-    //         for cycle in cycles {
-    //             println!("Cycle: {:?}", cycle);
-    //         }
-    //     }
-    // }
 }
 
 #[derive(Debug, Clone)]
@@ -395,8 +463,9 @@ impl<'a> Block<'a> {
         edges
     }
 
-    pub fn get_latency(&self) -> u32 {
-        self.instructions.len() as u32
+    pub fn get_latency(&self) -> f32 {
+        // TODO: real latency
+        self.instructions.len() as f32
     }
 }
 
