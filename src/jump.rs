@@ -97,7 +97,7 @@ pub fn get_exit_jump(
             }
         } else if is_ret {
             // return the last value of lastcalls and remove it from the vector
-            Some(ExitJump::Ret(None))
+            Some(ExitJump::Ret(vec![]))
         } else {
             Some(ExitJump::Indirect)
         }
