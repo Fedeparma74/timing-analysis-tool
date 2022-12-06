@@ -1,6 +1,7 @@
 mod block;
 mod jump;
 
+use std::cell::RefCell;
 use std::collections::{hash_map, HashMap};
 use std::io::Write;
 use std::{collections::HashSet, fmt::Display};
@@ -17,10 +18,16 @@ use petgraph::Direction::{Incoming, Outgoing};
 
 use crate::block::Block;
 
-const MAX_CYCLES: u32 = 1;
+thread_local! {
+    static CURRENT_ARCH: RefCell<Option<ArchMode>> = RefCell::new(None);
+}
+
+const MAX_CYCLES: u32 = 2;
 
 fn main() {
-    let bin_file = std::fs::read("cyclic.o").unwrap();
+    dotenv::dotenv().ok(); // load .env file
+
+    let bin_file = std::fs::read("prova-arm.o").unwrap();
     let obj_file = object::File::parse(bin_file.as_slice()).unwrap();
     let arch = obj_file.architecture();
 
@@ -35,6 +42,9 @@ fn main() {
     }
 
     let arch_mode = ArchMode::from(arch);
+    CURRENT_ARCH.with(|current_arch| {
+        *current_arch.borrow_mut() = Some(arch_mode.clone());
+    });
 
     println!("{:?}", arch_mode);
 
@@ -83,7 +93,7 @@ fn main() {
                     leaders.remove(&next_instruction.address());
                 }
                 ExitJump::Call(target) => {
-                    if next_instruction.address() != target {
+                    if next_instruction.address() != target && target != instruction.address() {
                         leaders.insert(target);
                         if let hash_map::Entry::Vacant(e) = call_map.entry(target) {
                             e.insert(vec![next_instruction.address()]);
@@ -164,7 +174,7 @@ fn main() {
             graph.add_edge(
                 node_index_map.get(&block.leader).unwrap().clone(),
                 node_index_map.get(&target).unwrap().clone(),
-                next_block.get_latency() as f32,
+                next_block.get_latency() as f32 * -1.0,
             );
         }
     }
@@ -185,6 +195,7 @@ fn main() {
 
     let mut condensed_graph = condensation(graph.clone().into(), true);
     let mut condensed_graph_map = HashMap::<u64, NodeIndex<u32>>::new();
+    let mut condensed_entry_node_latency = HashMap::<NodeIndex<u32>, i32>::new();
 
     for condensed_node_index in condensed_graph.node_indices() {
         let blocks = condensed_graph.node_weight(condensed_node_index).unwrap();
@@ -218,7 +229,7 @@ fn main() {
                         cycle_graph.add_edge(
                             condensed_node_index_map.get(&block.leader).unwrap().clone(),
                             target_node_index.clone(),
-                            next_block.get_latency() as f32,
+                            next_block.get_latency() as f32 * -1.0,
                         );
                     }
                 }
@@ -247,17 +258,19 @@ fn main() {
             // find the longest path in the cycle graph
             let path = bellman_ford(&cycle_graph, *cycle_entry_block_index).unwrap();
 
+            println!("Path: {:?}", path.distances);
+
             // calculate the latency of the longest path
             let max_path_latency = path
                 .distances
                 .iter()
                 .filter(|x| x.is_finite())
-                .max_by(|a, b| a.partial_cmp(b).unwrap())
+                .min_by(|a, b| a.partial_cmp(b).unwrap())
                 .unwrap()
-                .to_owned() as u32;
+                .to_owned() as i32;
 
             // calculate the total latency of the cycle
-            let cycle_latency = cycle_entry_block.get_latency() + max_path_latency;
+            let cycle_latency = cycle_entry_block.get_latency() as i32 * -1 + max_path_latency;
 
             // get the outer block of the cyclic node (it's always only one because it's the exit condition of the cycle)
             let outer_block_index = condensed_graph
@@ -287,22 +300,40 @@ fn main() {
                     .distances
                     .iter()
                     .filter(|x| x.is_finite())
-                    .max_by(|a, b| a.partial_cmp(b).unwrap())
+                    .min_by(|a, b| a.partial_cmp(b).unwrap())
                     .unwrap()
-                    .to_owned() as u32;
+                    .to_owned() as i32;
 
-            let total_cycle_latency = direct_path_latency + MAX_CYCLES * cycle_latency;
+            println!(
+                "Cycle latency: {}, direct path latency: {}",
+                cycle_latency, direct_path_latency
+            );
 
-            // edit the outgoing edge latency of the condensed node
-            for edge in condensed_graph
-                .clone()
+            let total_cycle_latency = direct_path_latency + MAX_CYCLES as i32 * cycle_latency;
+            println!("Total cycle latency: {}", total_cycle_latency);
+
+            if condensed_graph
                 .edges_directed(condensed_node_index, Incoming)
+                .count()
+                == 0
             {
-                // let edge_index = graph_cycle.find_edge(edge.id(), edge.target()).unwrap();
-                condensed_graph.update_edge(
-                    edge.source(),
-                    edge.target(),
-                    total_cycle_latency as f32,
+                // if the node has no incoming edges, it is an entry node
+                condensed_entry_node_latency.insert(condensed_node_index, total_cycle_latency);
+            } else {
+                for edge in condensed_graph
+                    .clone()
+                    .edges_directed(condensed_node_index, Incoming)
+                {
+                    condensed_graph.update_edge(
+                        edge.source(),
+                        edge.target(),
+                        total_cycle_latency as f32,
+                    );
+                }
+                condensed_entry_node_latency.insert(
+                    condensed_node_index,
+                    condensed_graph.node_weight(condensed_node_index).unwrap()[0].get_latency()
+                        as i32,
                 );
             }
         }
@@ -314,19 +345,28 @@ fn main() {
         .filter(|node| condensed_graph.edges_directed(*node, Incoming).count() == 0)
         .collect::<Vec<_>>();
 
-    let mut wcet: u32 = 0;
+    let mut wcet: i32 = 0;
     for entry_node in entry_nodes {
-        let entry_node_latency = condensed_graph.node_weight(entry_node).unwrap()[0].get_latency();
+        let entry_node_latency = match condensed_entry_node_latency.get(&entry_node) {
+            Some(latency) => *latency * -1,
+            None => condensed_graph.node_weight(entry_node).unwrap()[0].get_latency() as i32,
+        };
+
+        println!("entry node latency: {}", entry_node_latency);
         let path = bellman_ford(&condensed_graph, entry_node).unwrap();
         let max_path_latency = path
             .distances
             .iter()
             .filter(|x| x.is_finite())
-            .max_by(|a, b| a.partial_cmp(b).unwrap())
+            .min_by(|a, b| a.partial_cmp(b).unwrap())
             .unwrap()
-            .to_owned() as u32;
+            .to_owned() as i32;
 
-        wcet = wcet.max(entry_node_latency + max_path_latency);
+        println!("max path latency: {}", max_path_latency);
+
+        wcet = wcet.max(entry_node_latency + max_path_latency.abs());
+
+        println!("wcet: {}", wcet);
     }
 
     println!("WCET: {} clock cycles", wcet);
@@ -401,6 +441,8 @@ pub struct Instruction {
 
 impl<'a> From<&'a Insn<'a>> for Instruction {
     fn from(insn: &'a Insn<'a>) -> Self {
+        let mnemonic = insn.mnemonic().unwrap().to_string();
+
         let operands = match insn.op_str() {
             Some(operands) => {
                 let operands = operands.split(',').map(|o| o.trim()).collect::<Vec<&str>>();
@@ -412,14 +454,34 @@ impl<'a> From<&'a Insn<'a>> for Instruction {
             }
             None => (None, None),
         };
+
+        let arch_mode = CURRENT_ARCH.with(|arch| arch.borrow().clone());
+
+        let arch_mnemonic_str = if let Some(arch_mode) = arch_mode {
+            format!(
+                "{}_{}",
+                arch_mode.arch.to_string().to_uppercase(),
+                mnemonic.to_uppercase()
+            )
+        } else {
+            panic!("No architecture set")
+        };
+
+        println!("{}", arch_mnemonic_str);
+
+        let latency = match std::env::var(arch_mnemonic_str) {
+            Ok(latency) => latency.parse::<u32>().unwrap(),
+            _ => 1,
+        };
+
         Instruction {
             address: insn.address(),
-            mnemonic: insn.mnemonic().unwrap().to_string(),
+            mnemonic,
             operands: (
                 operands.0.map(|s| s.to_string()),
                 operands.1.map(|s| s.to_string()),
             ),
-            latency: 1, // TODO: get the latency from the instruction
+            latency,
         }
     }
 }

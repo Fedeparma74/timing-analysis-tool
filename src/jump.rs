@@ -39,11 +39,8 @@ pub fn get_exit_jump(
     if is_jump {
         let op = insn.mnemonic().unwrap();
         let is_unconditional = match arch {
-            // Arch::ARM => match op {
-            //     "b" | "bl" | "bx" | "blx" => true,
-            //     _ => false,
-            // },
-            Arch::ARM64 => matches!(op, "b" | "bl" | "br" | "blr" | "ret"),
+            Arch::ARM => matches!(op, "b" | "bl" | "br" | "blr" | "bcc" | "ret"),
+            Arch::ARM64 => matches!(op, "b" | "bl" | "br" | "blr" | "bcc" | "ret"),
             // Arch::MIPS => match op {
             //     "j" | "jal" | "jr" | "jalr" => true,
             //     _ => false,
@@ -60,9 +57,22 @@ pub fn get_exit_jump(
             Arch::TMS320C64X => todo!(),
             Arch::M680X => todo!(),
             Arch::EVM => todo!(),
-            // Arch::RISCV => match op {
-            //     "j" | "jal" | "jr" | "jalr" | "ret" | _ => false,
-            // },
+            Arch::RISCV => matches!(
+                op,
+                "j" | "jal"
+                    | "jr"
+                    | "jalr"
+                    | "tail"
+                    | "call"
+                    | "ecall"
+                    | "scall"
+                    | "ret"
+                    | "eret"
+                    | "c.j"
+                    | "c.jal"
+                    | "c.jr"
+                    | "c.jalr"
+            ),
             _ => todo!(),
         };
 

@@ -60,7 +60,6 @@ impl Block {
     }
 
     pub fn get_latency(&self) -> u32 {
-        // TODO: real latency
         self.instructions.iter().map(|i| i.latency).sum()
     }
 }
