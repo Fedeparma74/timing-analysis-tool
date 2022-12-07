@@ -1,5 +1,57 @@
-use crate::ExitJump;
 use capstone::{Arch, Insn, InsnDetail, InsnGroupType};
+
+#[derive(Debug, Clone)]
+pub enum ExitJump {
+    ConditionalRelative { taken: u64, not_taken: u64 },
+    UnconditionalRelative(u64),
+    ConditionalAbsolute { taken: u64, not_taken: u64 },
+    UnconditionalAbsolute(u64),
+    Indirect,
+    Ret(Vec<u64>),
+    Call(u64),
+    Next(u64),
+}
+
+impl std::fmt::Display for ExitJump {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ExitJump::ConditionalRelative { taken, not_taken } => {
+                write!(
+                    f,
+                    "ConditionalRelative {{ taken: 0x{:x}, not_taken: 0x{:x} }}",
+                    taken, not_taken
+                )
+            }
+            ExitJump::UnconditionalRelative(target) => {
+                write!(f, "UnconditionalRelative {{ target: 0x{:x} }}", target)
+            }
+            ExitJump::ConditionalAbsolute { taken, not_taken } => {
+                write!(
+                    f,
+                    "ConditionalAbsolute {{ taken: 0x{:x}, not_taken: 0x{:x} }}",
+                    taken, not_taken
+                )
+            }
+            ExitJump::UnconditionalAbsolute(target) => {
+                write!(f, "UnconditionalAbsolute {{ target: 0x{:x} }}", target)
+            }
+            ExitJump::Indirect => write!(f, "Indirect"),
+            ExitJump::Ret(targets) => {
+                if targets.is_empty() {
+                    write!(f, "Ret {{ targets: None }}")
+                } else {
+                    write!(f, "Ret {{ targets: [")?;
+                    for target in targets {
+                        write!(f, "0x{:x}, ", target)?;
+                    }
+                    write!(f, "] }}")
+                }
+            }
+            ExitJump::Call(target) => write!(f, "Call {{ target: 0x{:x} }}", target),
+            ExitJump::Next(target) => write!(f, "Next {{ target: 0x{:x} }}", target),
+        }
+    }
+}
 
 pub fn get_exit_jump(
     insn: &Insn,

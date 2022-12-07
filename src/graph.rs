@@ -1,15 +1,12 @@
 #![allow(dead_code)]
-use std::collections::HashMap;
+use std::collections::{hash_map, HashMap};
 
 use petgraph::algo::{bellman_ford, condensation};
 use petgraph::dot::Dot;
 use petgraph::stable_graph::EdgeIndex;
+use petgraph::stable_graph::{NodeIndex, StableGraph};
 use petgraph::visit::EdgeRef;
 use petgraph::Direction;
-use petgraph::{
-    stable_graph::{NodeIndex, StableGraph},
-    Graph,
-};
 
 use crate::block::Block;
 
@@ -18,60 +15,6 @@ pub struct MappedGraph {
     graph: StableGraph<Block, f32>,
     node_index_map: HashMap<u64, NodeIndex<u32>>,
     edge_index_map: HashMap<(u64, u64), EdgeIndex<u32>>,
-}
-
-impl From<StableGraph<Block, f32>> for MappedGraph {
-    fn from(graph: StableGraph<Block, f32>) -> Self {
-        let mut node_index_map = HashMap::new();
-        let mut edge_index_map = HashMap::new();
-
-        for node_index in graph.node_indices() {
-            let node = graph.node_weight(node_index).unwrap();
-            node_index_map.insert(node.leader, node_index);
-        }
-
-        for edge_index in graph.edge_indices() {
-            let (source, target) = graph.edge_endpoints(edge_index).unwrap();
-
-            let source = graph.node_weight(source).unwrap();
-            let target = graph.node_weight(target).unwrap();
-
-            edge_index_map.insert((source.leader, target.leader), edge_index);
-        }
-
-        MappedGraph {
-            graph,
-            node_index_map,
-            edge_index_map,
-        }
-    }
-}
-
-impl From<Graph<Block, f32>> for MappedGraph {
-    fn from(graph: Graph<Block, f32>) -> Self {
-        let mut node_index_map = HashMap::new();
-        let mut edge_index_map = HashMap::new();
-
-        for node_index in graph.node_indices() {
-            let node = graph.node_weight(node_index).unwrap();
-            node_index_map.insert(node.leader, node_index);
-        }
-
-        for edge_index in graph.edge_indices() {
-            let (source, target) = graph.edge_endpoints(edge_index).unwrap();
-
-            let source = graph.node_weight(source).unwrap();
-            let target = graph.node_weight(target).unwrap();
-
-            edge_index_map.insert((source.leader, target.leader), edge_index);
-        }
-
-        MappedGraph {
-            graph: graph.into(),
-            node_index_map,
-            edge_index_map,
-        }
-    }
 }
 
 impl MappedGraph {
@@ -84,8 +27,10 @@ impl MappedGraph {
     }
 
     pub fn add_node(&mut self, block: Block) {
-        let node_index = self.graph.add_node(block.clone());
-        self.node_index_map.insert(block.leader, node_index);
+        if let hash_map::Entry::Vacant(e) = self.node_index_map.entry(block.leader) {
+            let node_index = self.graph.add_node(block);
+            e.insert(node_index);
+        }
     }
 
     pub fn remove_node(&mut self, block: &Block) {
@@ -95,22 +40,21 @@ impl MappedGraph {
     }
 
     pub fn get_nodes(&self) -> Vec<Block> {
-        self.graph
-            .node_weights()
-            .map(|node| node.clone())
-            .collect::<Vec<Block>>()
+        self.graph.node_weights().cloned().collect::<Vec<Block>>()
     }
 
     pub fn add_edge(&mut self, source: Block, target: Block, weight: f32) {
         self.add_node(source.clone());
         self.add_node(target.clone());
 
-        let source_index = self.node_index_map[&source.leader];
-        let target_index = self.node_index_map[&target.leader];
-
-        let edge_index = self.graph.add_edge(source_index, target_index, weight);
-        self.edge_index_map
-            .insert((source.leader, target.leader), edge_index);
+        if let hash_map::Entry::Vacant(e) =
+            self.edge_index_map.entry((source.leader, target.leader))
+        {
+            let source_index = self.node_index_map[&source.leader];
+            let target_index = self.node_index_map[&target.leader];
+            let edge_index = self.graph.add_edge(source_index, target_index, weight);
+            e.insert(edge_index);
+        }
     }
 
     pub fn remove_edge(&mut self, source: &Block, target: &Block) {
@@ -137,7 +81,7 @@ impl MappedGraph {
                 let source = self.graph.node_weight(source).unwrap();
                 let target = self.graph.node_weight(target).unwrap();
 
-                (source.clone(), target.clone(), edge.clone())
+                (source.clone(), target.clone(), *edge)
             })
             .collect::<Vec<(Block, Block, f32)>>()
     }
@@ -146,16 +90,14 @@ impl MappedGraph {
         let node_index = self.node_index_map[&node.leader];
         let edges = self.graph.edges_directed(node_index, direction);
 
-        let edges = edges
+        edges
             .map(|edge| {
                 let source = self.graph.node_weight(edge.source()).unwrap();
                 let target = self.graph.node_weight(edge.target()).unwrap();
 
-                (source.clone(), target.clone(), edge.weight().clone())
+                (source.clone(), target.clone(), *edge.weight())
             })
-            .collect::<Vec<(Block, Block, f32)>>();
-
-        edges
+            .collect::<Vec<(Block, Block, f32)>>()
     }
 
     pub fn neighbors_directed(&self, node: &Block, direction: Direction) -> Vec<Block> {
@@ -262,14 +204,13 @@ impl MappedCondensedGraph {
                 condensed_nodes.push(blocks.clone());
             }
         }
-
         condensed_nodes
     }
 
     pub fn add_node(&mut self, blocks: Vec<Block>) {
-        let node_index = self.graph.add_node(blocks.clone());
-        for block in blocks.iter() {
-            self.node_index_map.insert(block.leader, node_index);
+        if let hash_map::Entry::Vacant(e) = self.node_index_map.entry(blocks[0].leader) {
+            let node_index = self.graph.add_node(blocks.clone());
+            e.insert(node_index);
         }
     }
 
@@ -293,12 +234,16 @@ impl MappedCondensedGraph {
         self.add_node(source.clone());
         self.add_node(target.clone());
 
-        let source_index = self.node_index_map[&source[0].leader];
-        let target_index = self.node_index_map[&target[0].leader];
+        if let hash_map::Entry::Vacant(e) = self
+            .edge_index_map
+            .entry((source[0].leader, target[0].leader))
+        {
+            let source_index = self.node_index_map[&source[0].leader];
+            let target_index = self.node_index_map[&target[0].leader];
 
-        let edge_index = self.graph.add_edge(source_index, target_index, weight);
-        self.edge_index_map
-            .insert((source[0].leader, target[0].leader), edge_index);
+            let edge_index = self.graph.add_edge(source_index, target_index, weight);
+            e.insert(edge_index);
+        }
     }
 
     pub fn remove_edge(&mut self, source: &[Block], target: &[Block]) {
@@ -332,7 +277,7 @@ impl MappedCondensedGraph {
 
     pub fn edges_directed(
         &self,
-        node: &Vec<Block>,
+        node: &[Block],
         direction: Direction,
     ) -> Vec<(Vec<Block>, Vec<Block>, f32)> {
         let node_index = self.node_index_map[&node[0].leader];

@@ -1,19 +1,22 @@
+mod arch;
 mod block;
 mod graph;
+mod instruction;
 mod jump;
 
 use std::cell::RefCell;
-use std::collections::{hash_map, HashMap};
+use std::collections::{hash_map, HashMap, HashSet};
 use std::io::Write;
-use std::{collections::HashSet, fmt::Display};
 
-use capstone::{Arch, Capstone, Insn, Mode, NO_EXTRA_MODE};
+use capstone::{Capstone, NO_EXTRA_MODE};
 use jump::get_exit_jump;
 use object::{Object, ObjectSection};
 use petgraph::Direction::{Incoming, Outgoing};
 
+use crate::arch::ArchMode;
 use crate::block::Block;
 use crate::graph::MappedGraph;
+use crate::jump::ExitJump;
 
 thread_local! {
     static CURRENT_ARCH: RefCell<Option<ArchMode>> = RefCell::new(None);
@@ -112,6 +115,8 @@ fn main() {
     let first_instruction = instructions.first().unwrap();
     let mut current_block: Block = Block::new(first_instruction.into());
     let mut blocks = HashMap::<u64, Block>::new();
+    // we need to keep the order of the blocks to have a consistent entry point of a condensed node (HashMap is not ordered)
+    let mut ordered_block_leaders = Vec::<u64>::new();
 
     let mut graph = MappedGraph::new();
 
@@ -145,6 +150,7 @@ fn main() {
 
                 // insert the current block to the list of blocks
                 blocks.insert(current_block.leader, current_block.clone());
+                ordered_block_leaders.push(current_block.leader);
                 current_block = Block::new(next_insn.into());
             } else {
                 // push the instruction to the current block
@@ -155,15 +161,17 @@ fn main() {
             if index == instructions.len() - 2 {
                 current_block.add_instruction(next_insn.into());
                 blocks.insert(current_block.leader, current_block.clone());
+                ordered_block_leaders.push(current_block.leader);
             }
         });
 
     // add edges to the graph (it also adds the nodes)
-    for (_, block) in &blocks {
-        for target in block.get_targets() {
+    for block_leader in &ordered_block_leaders {
+        let source_block = blocks.get(block_leader).unwrap();
+        for target in source_block.get_targets() {
             let target_block = blocks.get(&target).unwrap();
             graph.add_edge(
-                block.clone(),
+                source_block.clone(),
                 target_block.clone(),
                 target_block.get_latency() as f32,
             );
@@ -187,6 +195,12 @@ fn main() {
 
     let mut condensed_graph = graph.condense_cycles();
     let mut condensed_entry_node_latency = HashMap::<u64, f32>::new(); // block_leader -> latency
+
+    let mut dot_file = std::fs::File::create("condensed_graph.dot").expect("Unable to create file");
+    let digraph = condensed_graph.to_dot_graph();
+    dot_file
+        .write_all(digraph.as_bytes())
+        .expect("Unable to write dot file");
 
     for condensed_node in condensed_graph.get_condensed_nodes() {
         // create new graph with the blocks of the condensed node, acyclic
@@ -240,19 +254,13 @@ fn main() {
         let total_cycle_latency = direct_path_latency + MAX_CYCLES as f32 * cycle_latency;
         println!("Total cycle latency: {}", total_cycle_latency);
 
-        if condensed_graph
-            .edges_directed(&condensed_node, Incoming)
-            .len()
-            == 0
-        {
+        let node_incoming_edges = condensed_graph.edges_directed(&condensed_node, Incoming);
+        if node_incoming_edges.is_empty() {
             // if the node has no incoming edges, it is an entry node
             condensed_entry_node_latency.insert(condensed_node[0].leader, total_cycle_latency);
         } else {
-            for (source, target, _) in condensed_graph
-                .clone()
-                .edges_directed(&condensed_node, Incoming)
-            {
-                condensed_graph.update_edge(&source, &target, total_cycle_latency as f32);
+            for (source, target, _) in node_incoming_edges {
+                condensed_graph.update_edge(&source, &target, total_cycle_latency);
             }
             condensed_entry_node_latency.insert(
                 condensed_node[0].leader,
@@ -265,14 +273,14 @@ fn main() {
     let condensed_graph_nodes = condensed_graph.get_nodes();
     let entry_nodes = condensed_graph_nodes
         .iter()
-        .filter(|node| condensed_graph.edges_directed(*node, Incoming).len() == 0)
+        .filter(|node| condensed_graph.edges_directed(node, Incoming).is_empty())
         .collect::<Vec<_>>();
 
     let mut wcet: u32 = 0;
     for entry_node in entry_nodes {
         let entry_node_latency = match condensed_entry_node_latency.get(&entry_node[0].leader) {
             Some(latency) => *latency as u32,
-            None => entry_node[0].get_latency() as u32,
+            None => entry_node[0].get_latency(),
         };
 
         println!("entry node latency: {}", entry_node_latency);
@@ -282,174 +290,7 @@ fn main() {
         println!("max path latency: {}", max_path_latency);
 
         wcet = wcet.max(entry_node_latency + max_path_latency);
-
-        println!("wcet: {}", wcet);
     }
 
     println!("WCET: {} clock cycles", wcet);
-
-    let mut dot_file = std::fs::File::create("condensed_graph.dot").expect("Unable to create file");
-    let digraph = condensed_graph.to_dot_graph();
-    dot_file
-        .write_all(format!("{:?}", digraph).as_bytes())
-        .expect("Unable to write dot file");
-}
-
-#[derive(Debug, Clone)]
-pub enum ExitJump {
-    ConditionalRelative { taken: u64, not_taken: u64 },
-    UnconditionalRelative(u64),
-    ConditionalAbsolute { taken: u64, not_taken: u64 },
-    UnconditionalAbsolute(u64),
-    Indirect,
-    Ret(Vec<u64>),
-    Call(u64),
-    Next(u64),
-}
-
-impl Display for ExitJump {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            ExitJump::ConditionalRelative { taken, not_taken } => {
-                write!(
-                    f,
-                    "ConditionalRelative {{ taken: 0x{:x}, not_taken: 0x{:x} }}",
-                    taken, not_taken
-                )
-            }
-            ExitJump::UnconditionalRelative(target) => {
-                write!(f, "UnconditionalRelative {{ target: 0x{:x} }}", target)
-            }
-            ExitJump::ConditionalAbsolute { taken, not_taken } => {
-                write!(
-                    f,
-                    "ConditionalAbsolute {{ taken: 0x{:x}, not_taken: 0x{:x} }}",
-                    taken, not_taken
-                )
-            }
-            ExitJump::UnconditionalAbsolute(target) => {
-                write!(f, "UnconditionalAbsolute {{ target: 0x{:x} }}", target)
-            }
-            ExitJump::Indirect => write!(f, "Indirect"),
-            ExitJump::Ret(targets) => {
-                if targets.is_empty() {
-                    write!(f, "Ret {{ targets: None }}")
-                } else {
-                    write!(f, "Ret {{ targets: [")?;
-                    for target in targets {
-                        write!(f, "0x{:x}, ", target)?;
-                    }
-                    write!(f, "] }}")
-                }
-            }
-            ExitJump::Call(target) => write!(f, "Call {{ target: 0x{:x} }}", target),
-            ExitJump::Next(target) => write!(f, "Next {{ target: 0x{:x} }}", target),
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct Instruction {
-    pub address: u64,
-    pub mnemonic: String,
-    pub operands: (Option<String>, Option<String>),
-    pub latency: u32, // in cycles
-}
-
-impl<'a> From<&'a Insn<'a>> for Instruction {
-    fn from(insn: &'a Insn<'a>) -> Self {
-        let mnemonic = insn.mnemonic().unwrap().to_string();
-
-        let operands = match insn.op_str() {
-            Some(operands) => {
-                let operands = operands.split(',').map(|o| o.trim()).collect::<Vec<&str>>();
-                if operands.len() == 1 {
-                    (Some(operands[0]), None)
-                } else {
-                    (Some(operands[0]), Some(operands[1]))
-                }
-            }
-            None => (None, None),
-        };
-
-        let arch_mode = CURRENT_ARCH.with(|arch| arch.borrow().clone());
-
-        let arch_mnemonic_str = if let Some(arch_mode) = arch_mode {
-            format!(
-                "{}_{}",
-                arch_mode.arch.to_string().to_uppercase(),
-                mnemonic.to_uppercase()
-            )
-        } else {
-            panic!("No architecture set")
-        };
-
-        println!("{}", arch_mnemonic_str);
-
-        let latency = match std::env::var(arch_mnemonic_str) {
-            Ok(latency) => latency.parse::<u32>().unwrap(),
-            _ => 1,
-        };
-
-        Instruction {
-            address: insn.address(),
-            mnemonic,
-            operands: (
-                operands.0.map(|s| s.to_string()),
-                operands.1.map(|s| s.to_string()),
-            ),
-            latency,
-        }
-    }
-}
-
-impl Display for Instruction {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let operands_str = match &self.operands {
-            (Some(op1), Some(op2)) => format!("{}, {}", op1, op2),
-            (Some(op1), None) => format!("{}", op1),
-            _ => "".to_string(),
-        };
-        write!(
-            f,
-            "0x{:x} {} {}",
-            self.address,
-            self.mnemonic,
-            operands_str.trim()
-        )
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct ArchMode {
-    pub arch: Arch,
-    pub mode: Mode,
-}
-
-impl From<object::Architecture> for ArchMode {
-    fn from(value: object::Architecture) -> Self {
-        match value {
-            object::Architecture::X86_64 => ArchMode {
-                arch: Arch::X86,
-                mode: Mode::Mode64,
-            },
-            object::Architecture::X86_64_X32 => ArchMode {
-                arch: Arch::X86,
-                mode: Mode::Mode32,
-            },
-            object::Architecture::Aarch64 => ArchMode {
-                arch: Arch::ARM64,
-                mode: Mode::Arm,
-            },
-            object::Architecture::Arm => ArchMode {
-                arch: Arch::ARM,
-                mode: Mode::Mode32,
-            },
-            object::Architecture::LoongArch64 => ArchMode {
-                arch: Arch::ARM,
-                mode: Mode::Mode64,
-            },
-            _ => panic!("unsupported architecture"),
-        }
-    }
 }
