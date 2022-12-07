@@ -1,4 +1,5 @@
-use crate::{ExitJump, Instruction};
+use crate::instruction::Instruction;
+use crate::jump::ExitJump;
 
 #[derive(Default, Clone)]
 pub struct Block {
