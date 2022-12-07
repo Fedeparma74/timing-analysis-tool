@@ -12,9 +12,9 @@ use crate::block::Block;
 
 #[derive(Debug, Clone)]
 pub struct MappedGraph {
-    graph: StableGraph<Block, f32>,
-    node_index_map: HashMap<u64, NodeIndex<u32>>,
-    edge_index_map: HashMap<(u64, u64), EdgeIndex<u32>>,
+    pub graph: StableGraph<Block, f32>,
+    pub node_index_map: HashMap<u64, NodeIndex<u32>>,
+    pub edge_index_map: HashMap<(u64, u64), EdgeIndex<u32>>,
 }
 
 impl MappedGraph {
@@ -128,14 +128,14 @@ impl MappedGraph {
         max_path_latency
     }
 
-    pub fn longest_path(&self, source: &Block) -> f32 {
+    pub fn longest_path(&self, source: &Block) -> Result<f32, petgraph::algo::NegativeCycle> {
         // change the weights of the edges to negative values to find the longest path
         let mut graph = self.graph.clone();
         for edge in graph.edge_weights_mut() {
             *edge = -*edge;
         }
 
-        let paths = bellman_ford(&graph, self.node_index_map[&source.leader]).unwrap();
+        let paths = bellman_ford(&graph, self.node_index_map[&source.leader])?;
 
         let min_path_latency = paths
             .distances
@@ -145,7 +145,7 @@ impl MappedGraph {
             .unwrap()
             .to_owned();
 
-        min_path_latency * -1.0
+        Ok(min_path_latency * -1.0)
     }
 
     pub fn condense_cycles(&mut self) -> MappedCondensedGraph {
@@ -157,9 +157,7 @@ impl MappedGraph {
 
         for node_index in stable_condensed_graph.node_indices() {
             let blocks = stable_condensed_graph.node_weight(node_index).unwrap();
-            for block in blocks.iter() {
-                node_index_map.insert(block.leader, node_index);
-            }
+            node_index_map.insert(blocks[0].leader, node_index);
         }
 
         for edge_index in stable_condensed_graph.edge_indices() {
@@ -189,9 +187,9 @@ impl MappedGraph {
 
 #[derive(Debug, Clone)]
 pub struct MappedCondensedGraph {
-    graph: StableGraph<Vec<Block>, f32>,
-    node_index_map: HashMap<u64, NodeIndex<u32>>,
-    edge_index_map: HashMap<(u64, u64), EdgeIndex<u32>>,
+    pub graph: StableGraph<Vec<Block>, f32>,
+    pub node_index_map: HashMap<u64, NodeIndex<u32>>,
+    pub edge_index_map: HashMap<(u64, u64), EdgeIndex<u32>>,
 }
 
 impl MappedCondensedGraph {
@@ -323,14 +321,14 @@ impl MappedCondensedGraph {
         max_path_latency
     }
 
-    pub fn longest_path(&self, source: &[Block]) -> f32 {
+    pub fn longest_path(&self, source: &[Block]) -> Result<f32, petgraph::algo::NegativeCycle> {
         // change the weights of the edges to negative values to find the longest path
         let mut graph = self.graph.clone();
         for edge in graph.edge_weights_mut() {
             *edge = -*edge;
         }
 
-        let paths = bellman_ford(&graph, self.node_index_map[&source[0].leader]).unwrap();
+        let paths = bellman_ford(&graph, self.node_index_map[&source[0].leader])?;
 
         let min_path_latency = paths
             .distances
@@ -340,7 +338,7 @@ impl MappedCondensedGraph {
             .unwrap()
             .to_owned();
 
-        min_path_latency * -1.0
+        Ok(min_path_latency * -1.0)
     }
 
     pub fn to_dot_graph(&self) -> String {
