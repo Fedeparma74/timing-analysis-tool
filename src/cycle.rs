@@ -26,19 +26,37 @@ pub fn condensate_graph(
         // add edges to the cycle_graph
         for block in condensed_node.iter() {
             for target in block.get_targets() {
-                if !condensed_graph.node_index_map.contains_key(&target) {
-                    let target_block = blocks.get(&target).unwrap();
-                    cycle_graph.add_edge(
-                        block.clone(),
-                        target_block.clone(),
-                        target_block.get_latency() as f32,
-                    );
-                }
+                //if !condensed_graph.node_index_map.contains_key(&target) {
+                let target_block = blocks.get(&target).unwrap();
+                cycle_graph.add_edge(
+                    block.clone(),
+                    target_block.clone(),
+                    target_block.get_latency() as f32,
+                );
+                //      }
             }
         }
 
+        let outer_block =
+            condensed_graph.neighbors_directed(&condensed_node, Outgoing)[0].to_owned();
+
+        cycle_graph.remove_node(&outer_block[0]);
+
+        let exit_cycle_block = &original_graph.neighbors_directed(&outer_block[0], Incoming)[0];
+
+        cycle_graph.remove_edge(exit_cycle_block, &outer_block[0]);
+
         // remove incoming edge of entry node
-        let cycle_entry_block = condensed_node[0].clone(); // entry node is always the first block
+        //let cycle_entry_block = condensed_node[0].clone(); // entry node is always the first block //FALSE
+        let outer_block =
+            condensed_graph.neighbors_directed(&condensed_node, Incoming)[0].to_owned();
+
+        //TO Do: handle case where outer block has more than one block
+        if outer_block.len() > 1 {
+            panic!("Outer block has more than one block");
+        }
+
+        let cycle_entry_block = &original_graph.neighbors_directed(&outer_block[0], Outgoing)[0];
 
         for (source, target, _) in cycle_graph.edges_directed(&cycle_entry_block, Incoming) {
             cycle_graph.remove_edge(&source, &target);
@@ -65,16 +83,20 @@ pub fn condensate_graph(
                 let outer_block =
                     condensed_graph.neighbors_directed(&condensed_node, Outgoing)[0][0].to_owned();
 
+                println!("Outer block: {:?}", outer_block);
+
                 // get the cycle exit block in the original graph
                 let exit_block = &original_graph.neighbors_directed(&outer_block, Incoming)[0];
+
+                println!("Exit block: {:?}", exit_block);
 
                 let direct_path_latency =
                     cycle_latency - cycle_graph.longest_path(exit_block).unwrap() as u32;
 
-                // println!(
-                //     "Cycle latency: {}, direct path latency: {}",
-                //     cycle_latency, direct_path_latency
-                // );
+                println!(
+                    "Direct path latency: {}, cycle_latency: {}",
+                    direct_path_latency, cycle_latency
+                );
 
                 let cycle_node_latency = direct_path_latency + MAX_CYCLES * cycle_latency;
                 // println!("Per cycle latency: {}", cycle_node_latency);
@@ -92,7 +114,7 @@ pub fn condensate_graph(
                         .insert(condensed_node[0].leader, condensed_node[0].get_latency());
                 }
 
-                return condensed_graph;
+                // return condensed_graph;
             }
             Err(_) => {
                 let condensed_cycle_graph =
@@ -171,7 +193,7 @@ pub fn condensate_graph(
                         .insert(condensed_node[0].leader, condensed_node[0].get_latency());
                 }
 
-                return condensed_graph;
+                // return condensed_graph;
             }
         }
     }

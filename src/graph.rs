@@ -136,6 +136,7 @@ impl MappedGraph {
         }
 
         let paths = bellman_ford(&graph, self.node_index_map[&source.leader])?;
+        println!("leader: {:x}", &source.leader);
 
         let min_path_latency = paths
             .distances
@@ -144,6 +145,14 @@ impl MappedGraph {
             .min_by(|a, b| a.partial_cmp(b).unwrap())
             .unwrap()
             .to_owned();
+
+        //print distances
+        for (i, distance) in paths.distances.iter().enumerate() {
+            if distance.is_finite() {
+                let node = graph.node_weight(NodeIndex::new(i)).unwrap();
+                println!("distance: {:?}, leader: {:x}", distance, &node.leader);
+            }
+        }
 
         Ok(min_path_latency * -1.0)
     }
@@ -327,8 +336,11 @@ impl MappedCondensedGraph {
         for edge in graph.edge_weights_mut() {
             *edge = -*edge;
         }
+        //print exadecimal leader
 
+        println!("{:x}", &source[0].leader);
         let paths = bellman_ford(&graph, self.node_index_map[&source[0].leader])?;
+        
 
         let min_path_latency = paths
             .distances

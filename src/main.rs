@@ -29,7 +29,7 @@ const MAX_CYCLES: u32 = 1;
 fn main() {
     dotenv::dotenv().ok(); // load .env file
 
-    let file_bytes = std::fs::read("orribile.o").unwrap();
+    let file_bytes = std::fs::read("prova_d.o").unwrap();
     let obj_file = object::File::parse(file_bytes.as_slice()).unwrap();
 
     let arch = obj_file.architecture();
