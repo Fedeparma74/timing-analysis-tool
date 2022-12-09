@@ -220,15 +220,17 @@ impl MappedGraph {
             let mut graph_initial = self.graph.clone();
             let initial_map = self.node_index_map.clone();
 
-            // println!(
-            //     "source: {:x} {:x}",
-            //     &source.leader,
-            //     &last_block.get_call_next_target().unwrap()
-            // );
+            println!(
+                "source: {:x} {:x}",
+                &source.leader,
+                &last_block.leader,
+            );
 
             let edge_index =
                 self.edge_index_map[&(source.leader, last_block.get_call_next_target().unwrap())];
+
             self.graph.remove_edge(edge_index);
+
             let directed_path = self.longest_path(&source).unwrap() as f32 + entry_node_latency
                 - self.longest_path(exit_block).unwrap() as f32;
 
