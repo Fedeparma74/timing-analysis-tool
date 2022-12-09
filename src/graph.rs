@@ -197,6 +197,13 @@ impl MappedGraph {
         exit_block: &Block,
         entry_node_latency: f32,
     ) -> Result<f32, petgraph::algo::NegativeCycle> {
+        match self.longest_path(&source) {
+            Ok(_x) => {}
+            Err(e) => {
+                return Err(e);
+            }
+        }
+
         if entry_block.leader == exit_block.leader {
             let cycle_path = self.longest_path(&source).unwrap() as f32 + entry_node_latency;
             let directed_path = cycle_path - self.longest_path(exit_block).unwrap() as f32;
@@ -286,8 +293,6 @@ impl MappedGraph {
             dot_file
                 .write_all(digraph.to_string().as_bytes())
                 .expect("Unable to write dot file");
-
-            
 
             return Ok(total_cyle_path as f32);
         }
@@ -465,6 +470,12 @@ impl MappedCondensedGraph {
         last_block: &[Block],
         entry_node_latency: f32,
     ) -> Result<f32, petgraph::algo::NegativeCycle> {
+        match self.longest_path(source) {
+            Ok(x) => {}
+            Err(e) => {
+                return Err(e);
+            }
+        }
         if entry_block.leader == exit_block[0].leader {
             let cycle_path = self.longest_path(&source).unwrap() as f32 + entry_node_latency;
             let directed_path = cycle_path - self.longest_path(exit_block).unwrap() as f32;
