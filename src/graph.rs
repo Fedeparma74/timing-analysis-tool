@@ -138,7 +138,6 @@ impl MappedGraph {
         }
 
         let paths = bellman_ford(&graph, self.node_index_map[&source.leader])?;
-        println!("leader: {:x}", &source.leader);
 
         let min_path_latency = paths
             .distances
@@ -147,14 +146,6 @@ impl MappedGraph {
             .min_by(|a, b| a.partial_cmp(b).unwrap())
             .unwrap()
             .to_owned();
-
-        //print distances
-        // for (i, distance) in paths.distances.iter().enumerate() {
-        //     if distance.is_finite() {
-        //         let node = graph.node_weight(NodeIndex::new(i)).unwrap();
-        //         println!("distance: {:?}, leader: {:x}", distance, &node.leader);
-        //     }
-        // }
 
         Ok(min_path_latency * -1.0)
     }
@@ -229,11 +220,11 @@ impl MappedGraph {
             let mut graph_initial = self.graph.clone();
             let initial_map = self.node_index_map.clone();
 
-            println!(
-                "source: {:x} {:x}",
-                &source.leader,
-                &last_block.get_call_next_target().unwrap()
-            );
+            // println!(
+            //     "source: {:x} {:x}",
+            //     &source.leader,
+            //     &last_block.get_call_next_target().unwrap()
+            // );
 
             let edge_index =
                 self.edge_index_map[&(source.leader, last_block.get_call_next_target().unwrap())];
@@ -250,7 +241,7 @@ impl MappedGraph {
 
             println!("directed path: {}", directed_path);
 
-            //remove edges outgoing source block exepect those incoming to exit_block.get_targets()[1]
+            //remove edges outgoing source block exepect those incoming to last block
             let mut edges_to_remove = Vec::new();
             for edge in
                 graph_initial.edges_directed(initial_map[&source.leader], Direction::Outgoing)
@@ -269,7 +260,6 @@ impl MappedGraph {
             }
 
             let paths = bellman_ford(&graph_initial, initial_map[&source.leader])?;
-            println!("leader: {:x}", &source.leader);
 
             let min_path_latency = paths
                 .distances
@@ -280,19 +270,17 @@ impl MappedGraph {
                 .to_owned();
 
             let cycle_path = min_path_latency * -1.0 + entry_node_latency;
-
-            // let cycle_path = self.longest_path(&source).unwrap() as f32 + entry_node_latency;
-            let total_cyle_path = cycle_path * MAX_CYCLES as f32 + directed_path; //TO DO NUMVER OF CYCLES
+            let total_cyle_path = cycle_path * MAX_CYCLES as f32 + directed_path;
 
             println!("cycle path: {}", cycle_path);
 
             //print dot graph of graph_initial
-            let digraph = Dot::with_config(&graph_initial, &[]);
-            let mut dot_file = std::fs::File::create(format!("reconstrcuted_graph.dot",))
-                .expect("Unable to create file");
-            dot_file
-                .write_all(digraph.to_string().as_bytes())
-                .expect("Unable to write dot file");
+            // let digraph = Dot::with_config(&graph_initial, &[]);
+            // let mut dot_file = std::fs::File::create(format!("reconstruvted_graph.dot",))
+            //     .expect("Unable to create file");
+            // dot_file
+            //     .write_all(digraph.to_string().as_bytes())
+            //     .expect("Unable to write dot file");
 
             return Ok(total_cyle_path as f32);
         }
@@ -446,9 +434,7 @@ impl MappedCondensedGraph {
         for edge in graph.edge_weights_mut() {
             *edge = -*edge;
         }
-        //print exadecimal leader
 
-        println!("{:x}", &source[0].leader);
         let paths = bellman_ford(&graph, self.node_index_map[&source[0].leader])?;
 
         let min_path_latency = paths
@@ -471,7 +457,7 @@ impl MappedCondensedGraph {
         entry_node_latency: f32,
     ) -> Result<f32, petgraph::algo::NegativeCycle> {
         match self.longest_path(source) {
-            Ok(x) => {}
+            Ok(_x) => {}
             Err(e) => {
                 return Err(e);
             }
@@ -483,7 +469,7 @@ impl MappedCondensedGraph {
             return Ok(total_cyle_path);
         } else {
             match self.longest_path(source) {
-                Ok(x) => {}
+                Ok(_x) => {}
                 Err(e) => {
                     return Err(e);
                 }
@@ -500,7 +486,7 @@ impl MappedCondensedGraph {
             let directed_path = self.longest_path(source).unwrap() as f32 + entry_node_latency
                 - self.longest_path(exit_block).unwrap() as f32;
 
-            //remove edges outgoing source block except those incoming to exit_block.get_targets()[1]
+            //remove edges outgoing source block except those incoming to last block
             let mut edges_to_remove = Vec::new();
             for edge in
                 graph_initial.edges_directed(initial_map[&source[0].leader], Direction::Outgoing)
@@ -510,11 +496,11 @@ impl MappedCondensedGraph {
                 }
             }
 
-            println!(
-                "source: {:x} {:x}",
-                &source[0].leader,
-                &last_block[0].get_call_next_target().unwrap()
-            );
+            // println!(
+            //     "source: {:x} {:x}",
+            //     &source[0].leader,
+            //     &last_block[0].get_call_next_target().unwrap()
+            // );
 
             for edge in edges_to_remove {
                 graph_initial.remove_edge(edge);
@@ -537,18 +523,17 @@ impl MappedCondensedGraph {
 
             let cycle_path = min_path_latency * -1.0 + entry_node_latency;
 
-            // let cycle_path = graph_initial.longest_path(source).unwrap() as f32 + entry_node_latency;
-            let total_cyle_path = cycle_path + directed_path; //TO DO NUMBER OF CYCLES
+            let total_cyle_path = cycle_path * MAX_CYCLES as f32 + directed_path;
 
-            let digraph = self.to_dot_graph();
-            let mut dot_file = std::fs::File::create(format!("reconstrcuted_graph.dot",))
-                .expect("Unable to create file");
-            dot_file
-                .write_all(digraph.as_bytes())
-                .expect("Unable to write dot file");
+            // let digraph = self.to_dot_graph();
+            // let mut dot_file = std::fs::File::create(format!("reconsteucted_graph.dot",))
+            //     .expect("Unable to create file");
+            // dot_file
+            //     .write_all(digraph.as_bytes())
+            //     .expect("Unable to write dot file");
 
-            println!("cycle_path: {}", cycle_path);
-            println!("directed_path: {}", directed_path);
+            // println!("cycle_path: {}", cycle_path);
+            // println!("directed_path: {}", directed_path);
 
             return Ok(total_cyle_path as f32);
         }

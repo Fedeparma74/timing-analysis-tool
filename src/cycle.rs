@@ -32,7 +32,6 @@ pub fn condensate_graph(
                     target_block.clone(),
                     target_block.get_latency() as f32,
                 );
-                //      }
             }
         }
 
@@ -76,40 +75,23 @@ pub fn condensate_graph(
         let outer_block =
             condensed_graph.neighbors_directed(&condensed_node, Outgoing)[0][0].to_owned();
 
-        println!("Outer block: {:?}", outer_block);
-
         // get the cycle exit block in the original graph
         let exit_block = &original_graph.neighbors_directed(&outer_block, Incoming)[0];
-
-        println!("Exit block: {:?}", exit_block);
-
         let entry_node_latency = cycle_entry_block.get_latency();
 
-        // find the longest path in the cycle graph
-
-        match cycle_graph.reconstruct_longest_path(cycle_entry_block,cycle_entry_block,exit_block,entry_node_latency as f32) {
+        match cycle_graph.reconstruct_longest_path(
+            cycle_entry_block,
+            cycle_entry_block,
+            exit_block,
+            entry_node_latency as f32,
+        ) {
             Ok(cycle_node_latency) => {
-                // calculate the total latency of the cycle
-                //let cycle_latency = cycle_entry_block.get_latency() + max_path_latency as u32;
-
-                //here
-
-                // let direct_path_latency =
-                //     cycle_latency - cycle_graph.longest_path(exit_block).unwrap() as u32;
-
-                // println!(
-                //     "Direct path latency: {}, cycle_latency: {}",
-                //     direct_path_latency, cycle_latency
-                // );
-
-                // let cycle_node_latency = direct_path_latency + MAX_CYCLES * cycle_latency;
-                // // println!("Per cycle latency: {}", cycle_node_latency);
-
                 let node_incoming_edges = condensed_graph.edges_directed(&condensed_node, Incoming);
-                // println!("Incoming edges: {:?}", node_incoming_edges);
+
                 if node_incoming_edges.is_empty() {
                     // if the node has no incoming edges, it is an entry node
-                    entry_node_latency_map.insert(condensed_node[0].leader, cycle_node_latency as u32);
+                    entry_node_latency_map
+                        .insert(condensed_node[0].leader, cycle_node_latency as u32);
                 } else {
                     for (source, target, _) in node_incoming_edges {
                         condensed_graph.update_edge(&source, &target, cycle_node_latency as f32);
@@ -117,22 +99,10 @@ pub fn condensate_graph(
                     entry_node_latency_map
                         .insert(condensed_node[0].leader, condensed_node[0].get_latency());
                 }
-
-                // return condensed_graph;
             }
             Err(_) => {
                 let mut condensed_cycle_graph =
                     condensate_graph(cycle_graph.clone(), entry_node_latency_map, blocks);
-
-                let digraph = condensed_cycle_graph.to_dot_graph();
-                let mut dot_file = std::fs::File::create(format!(
-                    "condensed_cycle_graph_{}.dot",
-                    COUNTER.load(Ordering::Relaxed)
-                ))
-                .expect("Unable to create file");
-                dot_file
-                    .write_all(digraph.as_bytes())
-                    .expect("Unable to write dot file");
 
                 let condensed_cycle_graph_nodes = condensed_cycle_graph.get_nodes();
                 let entry_nodes = condensed_cycle_graph_nodes
@@ -146,46 +116,24 @@ pub fn condensate_graph(
 
                 let condensed_cycle_entry_node = entry_nodes[0].clone();
 
-                
                 let entry_node_latency =
                     match entry_node_latency_map.get(&condensed_cycle_entry_node[0].leader) {
                         Some(latency) => *latency as u32,
                         None => condensed_cycle_entry_node[0].get_latency(),
                     };
 
-                // // calculate the total latency of the cycle
-                // let cycle_latency = entry_node_latency + max_path_latency as u32;
-
                 // get the outer block of the cyclic node (it's always only one because it's the exit condition of the cycle)
                 let outer_block =
                     condensed_graph.neighbors_directed(&condensed_node, Outgoing)[0][0].to_owned();
 
-                println!("Outer block: {:?}", outer_block);
-
                 // get the cycle exit block in the original graph
                 let exit_block = &original_graph.neighbors_directed(&outer_block, Incoming);
-
-                println!("Exit block: {:?}", exit_block);
-
-                // let direct_path_latency = cycle_latency
-                //     - condensed_cycle_graph
-                //         .longest_path(&vec![exit_block.to_owned()])
-                //         .unwrap() as u32;
-
-                // println!(
-                //     "Cycle latency: {}, direct path latency: {}",
-                //     cycle_latency, direct_path_latency
-                // );
-
-                // let cycle_node_latency = direct_path_latency + MAX_CYCLES * cycle_latency;
-                // println!("Per cycle latency: {}", cycle_node_latency);
 
                 //find last block of condensated cycle graph
                 let mut last_block = condensed_cycle_entry_node.clone();
                 let mut last_block_found = false;
                 while !last_block_found {
-                    let neighbors = condensed_cycle_graph
-                        .neighbors_directed(&last_block, Outgoing);
+                    let neighbors = condensed_cycle_graph.neighbors_directed(&last_block, Outgoing);
                     if neighbors.is_empty() {
                         last_block_found = true;
                     } else {
@@ -194,13 +142,20 @@ pub fn condensate_graph(
                 }
 
                 let cycle_node_latency = condensed_cycle_graph
-                    .reconstruct_longest_path(&condensed_cycle_entry_node, &condensed_cycle_entry_node[0], exit_block, &last_block,entry_node_latency as f32)
+                    .reconstruct_longest_path(
+                        &condensed_cycle_entry_node,
+                        &condensed_cycle_entry_node[0],
+                        exit_block,
+                        &last_block,
+                        entry_node_latency as f32,
+                    )
                     .unwrap();
 
                 let node_incoming_edges = condensed_graph.edges_directed(&condensed_node, Incoming);
                 if node_incoming_edges.is_empty() {
                     // if the node has no incoming edges, it is an entry node
-                    entry_node_latency_map.insert(condensed_node[0].leader, cycle_node_latency as u32);
+                    entry_node_latency_map
+                        .insert(condensed_node[0].leader, cycle_node_latency as u32);
                 } else {
                     for (source, target, _) in node_incoming_edges {
                         condensed_graph.update_edge(&source, &target, cycle_node_latency as f32);
@@ -209,71 +164,18 @@ pub fn condensate_graph(
                         .insert(condensed_node[0].leader, condensed_node[0].get_latency());
                 }
 
-                // return condensed_graph;
+                let digraph = condensed_cycle_graph.to_dot_graph();
+                let mut dot_file = std::fs::File::create(format!(
+                    "condensed_cycle_graph_{}.dot",
+                    COUNTER.load(Ordering::Relaxed)
+                ))
+                .expect("Unable to create file");
+                dot_file
+                    .write_all(digraph.as_bytes())
+                    .expect("Unable to write dot file");
             }
         }
     }
 
     return condensed_graph;
-
-    //     //update latency incoming node, only 1 --> condensed_cycle_graph returned
-    //     let node_incoming_edges =
-    //         condensed_cycle_graph.edges_directed(&condensed_cycle_node, Incoming);
-    //     for (source, target, _) in node_incoming_edges {
-    //         condensed_cycle_graph.update_edge(
-    //             &source,
-    //             &target,
-    //             TOTAL_CYCLE_LATENCY.load(Ordering::Relaxed) as f32,
-    //         );
-    //     }
-
-    //     //calculate latency of the cycle --> condensed_graph
-
-    //     //update latency incoming node, only 1 --> condensed graph initially passed
-
-    //     let max_path_latency = cycle_graph.longest_path(&cycle_entry_block).unwrap();
-
-    //     // calculate the total latency of the cycle
-    //     let cycle_latency = cycle_entry_block.get_latency() + max_path_latency as u32;
-
-    //     // get the outer block of the cyclic node (it's always only one because it's the exit condition of the cycle)
-    //     let outer_block =
-    //         condensed_graph.neighbors_directed(&condensed_node, Outgoing)[0][0].to_owned();
-
-    //     // get the cycle exit block in the original graph
-    //     let exit_block = &original_graph.neighbors_directed(&outer_block, Incoming)[0];
-
-    //     let direct_path_latency =
-    //         cycle_latency - cycle_graph.longest_path(exit_block).unwrap() as u32;
-
-    //     println!(
-    //         "Cycle latency: {}, direct path latency: {}",
-    //         cycle_latency, direct_path_latency
-    //     );
-
-    //     let cycle_node_latency = direct_path_latency + MAX_CYCLES * cycle_latency;
-    //     println!("Per cycle latency: {}", cycle_node_latency);
-    //     println!("Total cycles: {}", cycle_node_latency);
-
-    //     let node_incoming_edges = condensed_graph.edges_directed(&condensed_node, Incoming);
-    //     if node_incoming_edges.is_empty() {
-    //         // if the node has no incoming edges, it is an entry node
-    //         entry_node_latency_map.insert(
-    //             condensed_node[0].leader,
-    //             TOTAL_CYCLE_LATENCY.load(Ordering::Relaxed),
-    //         );
-    //     } else {
-    //         for (source, target, _) in node_incoming_edges {
-    //             condensed_graph.update_edge(
-    //                 &source,
-    //                 &target,
-    //                 TOTAL_CYCLE_LATENCY.load(Ordering::Relaxed) as f32,
-    //             );
-    //         }
-    //         entry_node_latency_map
-    //             .insert(condensed_node[0].leader, condensed_node[0].get_latency());
-    //     }
-    // }
-
-    // (condensed_graph, TOTAL_CYCLE_LATENCY.load(Ordering::Relaxed))
 }
