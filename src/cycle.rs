@@ -6,7 +6,6 @@ use petgraph::Direction::{Incoming, Outgoing};
 
 use crate::block::Block;
 use crate::graph::{MappedCondensedGraph, MappedGraph};
-use crate::MAX_CYCLES;
 
 static COUNTER: AtomicU32 = AtomicU32::new(0);
 
@@ -72,40 +71,45 @@ pub fn condensate_graph(
             .write_all(digraph.as_bytes())
             .expect("Unable to write dot file");
 
+        // get the outer block of the cyclic node (it's always only one because it's the exit condition of the cycle)
+
+        let outer_block =
+            condensed_graph.neighbors_directed(&condensed_node, Outgoing)[0][0].to_owned();
+
+        println!("Outer block: {:?}", outer_block);
+
+        // get the cycle exit block in the original graph
+        let exit_block = &original_graph.neighbors_directed(&outer_block, Incoming)[0];
+
+        println!("Exit block: {:?}", exit_block);
+
+        let entry_node_latency = cycle_entry_block.get_latency();
+
         // find the longest path in the cycle graph
 
-        match cycle_graph.longest_path(&cycle_entry_block) {
-            Ok(max_path_latency) => {
+        match cycle_graph.reconstruct_longest_path(cycle_entry_block,cycle_entry_block,exit_block,entry_node_latency as f32) {
+            Ok(cycle_node_latency) => {
                 // calculate the total latency of the cycle
-                let cycle_latency = cycle_entry_block.get_latency() + max_path_latency as u32;
+                //let cycle_latency = cycle_entry_block.get_latency() + max_path_latency as u32;
 
-                // get the outer block of the cyclic node (it's always only one because it's the exit condition of the cycle)
-                let outer_block =
-                    condensed_graph.neighbors_directed(&condensed_node, Outgoing)[0][0].to_owned();
+                //here
 
-                println!("Outer block: {:?}", outer_block);
+                // let direct_path_latency =
+                //     cycle_latency - cycle_graph.longest_path(exit_block).unwrap() as u32;
 
-                // get the cycle exit block in the original graph
-                let exit_block = &original_graph.neighbors_directed(&outer_block, Incoming)[0];
+                // println!(
+                //     "Direct path latency: {}, cycle_latency: {}",
+                //     direct_path_latency, cycle_latency
+                // );
 
-                println!("Exit block: {:?}", exit_block);
-
-                let direct_path_latency =
-                    cycle_latency - cycle_graph.longest_path(exit_block).unwrap() as u32;
-
-                println!(
-                    "Direct path latency: {}, cycle_latency: {}",
-                    direct_path_latency, cycle_latency
-                );
-
-                let cycle_node_latency = direct_path_latency + MAX_CYCLES * cycle_latency;
-                // println!("Per cycle latency: {}", cycle_node_latency);
+                // let cycle_node_latency = direct_path_latency + MAX_CYCLES * cycle_latency;
+                // // println!("Per cycle latency: {}", cycle_node_latency);
 
                 let node_incoming_edges = condensed_graph.edges_directed(&condensed_node, Incoming);
                 // println!("Incoming edges: {:?}", node_incoming_edges);
                 if node_incoming_edges.is_empty() {
                     // if the node has no incoming edges, it is an entry node
-                    entry_node_latency_map.insert(condensed_node[0].leader, cycle_node_latency);
+                    entry_node_latency_map.insert(condensed_node[0].leader, cycle_node_latency as u32);
                 } else {
                     for (source, target, _) in node_incoming_edges {
                         condensed_graph.update_edge(&source, &target, cycle_node_latency as f32);
@@ -117,7 +121,7 @@ pub fn condensate_graph(
                 // return condensed_graph;
             }
             Err(_) => {
-                let condensed_cycle_graph =
+                let mut condensed_cycle_graph =
                     condensate_graph(cycle_graph.clone(), entry_node_latency_map, blocks);
 
                 let digraph = condensed_cycle_graph.to_dot_graph();
@@ -142,20 +146,15 @@ pub fn condensate_graph(
 
                 let condensed_cycle_entry_node = entry_nodes[0].clone();
 
-                let max_path_latency = condensed_cycle_graph
-                    .longest_path(&condensed_cycle_entry_node)
-                    .unwrap();
-
-                println!("Max path latency: {}", max_path_latency);
-
+                
                 let entry_node_latency =
                     match entry_node_latency_map.get(&condensed_cycle_entry_node[0].leader) {
                         Some(latency) => *latency as u32,
                         None => condensed_cycle_entry_node[0].get_latency(),
                     };
 
-                // calculate the total latency of the cycle
-                let cycle_latency = entry_node_latency + max_path_latency as u32;
+                // // calculate the total latency of the cycle
+                // let cycle_latency = entry_node_latency + max_path_latency as u32;
 
                 // get the outer block of the cyclic node (it's always only one because it's the exit condition of the cycle)
                 let outer_block =
@@ -164,27 +163,44 @@ pub fn condensate_graph(
                 println!("Outer block: {:?}", outer_block);
 
                 // get the cycle exit block in the original graph
-                let exit_block = &original_graph.neighbors_directed(&outer_block, Incoming)[0];
+                let exit_block = &original_graph.neighbors_directed(&outer_block, Incoming);
 
                 println!("Exit block: {:?}", exit_block);
 
-                let direct_path_latency = cycle_latency
-                    - condensed_cycle_graph
-                        .longest_path(&vec![exit_block.to_owned()])
-                        .unwrap() as u32;
+                // let direct_path_latency = cycle_latency
+                //     - condensed_cycle_graph
+                //         .longest_path(&vec![exit_block.to_owned()])
+                //         .unwrap() as u32;
 
-                println!(
-                    "Cycle latency: {}, direct path latency: {}",
-                    cycle_latency, direct_path_latency
-                );
+                // println!(
+                //     "Cycle latency: {}, direct path latency: {}",
+                //     cycle_latency, direct_path_latency
+                // );
 
-                let cycle_node_latency = direct_path_latency + MAX_CYCLES * cycle_latency;
-                println!("Per cycle latency: {}", cycle_node_latency);
+                // let cycle_node_latency = direct_path_latency + MAX_CYCLES * cycle_latency;
+                // println!("Per cycle latency: {}", cycle_node_latency);
+
+                //find last block of condensated cycle graph
+                let mut last_block = condensed_cycle_entry_node.clone();
+                let mut last_block_found = false;
+                while !last_block_found {
+                    let neighbors = condensed_cycle_graph
+                        .neighbors_directed(&last_block, Outgoing);
+                    if neighbors.is_empty() {
+                        last_block_found = true;
+                    } else {
+                        last_block = neighbors[0].clone();
+                    }
+                }
+
+                let cycle_node_latency = condensed_cycle_graph
+                    .reconstruct_longest_path(&condensed_cycle_entry_node, &condensed_cycle_entry_node[0], exit_block, &last_block,entry_node_latency as f32)
+                    .unwrap();
 
                 let node_incoming_edges = condensed_graph.edges_directed(&condensed_node, Incoming);
                 if node_incoming_edges.is_empty() {
                     // if the node has no incoming edges, it is an entry node
-                    entry_node_latency_map.insert(condensed_node[0].leader, cycle_node_latency);
+                    entry_node_latency_map.insert(condensed_node[0].leader, cycle_node_latency as u32);
                 } else {
                     for (source, target, _) in node_incoming_edges {
                         condensed_graph.update_edge(&source, &target, cycle_node_latency as f32);

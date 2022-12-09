@@ -29,7 +29,7 @@ const MAX_CYCLES: u32 = 1;
 fn main() {
     dotenv::dotenv().ok(); // load .env file
 
-    let file_bytes = std::fs::read("prova_d.o").unwrap();
+    let file_bytes = std::fs::read("prova_without_cycles.o").unwrap(); //prova_3ret.o --> 219, prova_d --> 229,  prova_without_cycles.o --> 139
     let obj_file = object::File::parse(file_bytes.as_slice()).unwrap();
 
     let arch = obj_file.architecture();
@@ -55,6 +55,12 @@ fn main() {
     let instructions = cs
         .disasm_all(&text_section, 0x1000)
         .expect("Failed to disassemble given code");
+    
+    //print instructions to file
+    let mut file = std::fs::File::create("instructions.txt").unwrap();
+    instructions.iter().for_each(|instruction| {
+        writeln!(file, "{:x}\t{:?}", instruction.address(), instruction.mnemonic()).unwrap();
+    });
 
     let mut leaders = HashSet::new();
     let mut jumps: HashMap<u64, ExitJump> = HashMap::new(); // jump_address -> ExitJump
@@ -91,7 +97,7 @@ fn main() {
                     jumps.remove(&instruction.address());
                     leaders.remove(&next_instruction.address());
                 }
-                ExitJump::Call(target) => {
+                ExitJump::Call(target,_) => {
                     if next_instruction.address() != target && target != instruction.address() {
                         leaders.insert(target);
                         if let hash_map::Entry::Vacant(e) = call_map.entry(target) {
