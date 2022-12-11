@@ -182,7 +182,7 @@ impl MappedGraph {
     }
 
     pub fn reconstruct_longest_path(
-        &mut self,
+        &self,
         source: &Block,
         entry_block: &Block,
         exit_block: &Block,
@@ -217,24 +217,27 @@ impl MappedGraph {
             }
 
             //cloning of the original graph
+            let graph = self.graph.clone();
             let mut graph_initial = self.graph.clone();
+            //transforming the graph to a mapped graph
+            let mut graph_copy = MappedGraph {
+                graph: graph,
+                node_index_map: self.node_index_map.clone(),
+                edge_index_map: self.edge_index_map.clone(),
+            };
             let initial_map = self.node_index_map.clone();
 
-            println!(
-                "source: {:x} {:x}",
-                &source.leader,
-                &last_block.leader,
-            );
+            println!("source: {:x} {:x}", &source.leader, &last_block.leader,);
 
-            let edge_index =
-                self.edge_index_map[&(source.leader, last_block.get_call_next_target().unwrap())];
+            let edge_index = graph_copy.edge_index_map
+                [&(source.leader, last_block.get_call_next_target().unwrap())];
 
-            self.graph.remove_edge(edge_index);
+            graph_copy.graph.remove_edge(edge_index);
 
-            let directed_path = self.longest_path(&source).unwrap() as f32 + entry_node_latency
-                - self.longest_path(exit_block).unwrap() as f32;
+            let directed_path = graph_copy.longest_path(&source).unwrap() as f32 + entry_node_latency
+                - graph_copy.longest_path(exit_block).unwrap() as f32;
 
-            let digraph = self.to_dot_graph();
+            let digraph = graph_copy.to_dot_graph();
             let mut dot_file = std::fs::File::create(format!("reconstrcuted_graph.dot",))
                 .expect("Unable to create file");
             dot_file
@@ -252,6 +255,8 @@ impl MappedGraph {
                     edges_to_remove.push(edge.id());
                 }
             }
+
+
 
             for edge in edges_to_remove {
                 graph_initial.remove_edge(edge);
@@ -467,7 +472,7 @@ impl MappedCondensedGraph {
         if entry_block.leader == exit_block[0].leader {
             let cycle_path = self.longest_path(&source).unwrap() as f32 + entry_node_latency;
             let directed_path = cycle_path - self.longest_path(exit_block).unwrap() as f32;
-            let total_cyle_path = cycle_path * MAX_CYCLES as f32 + directed_path; //TO DO NUMVER OF CYCLES
+            let total_cyle_path = cycle_path * MAX_CYCLES as f32 + directed_path;
             return Ok(total_cyle_path);
         } else {
             match self.longest_path(source) {
@@ -478,15 +483,25 @@ impl MappedCondensedGraph {
             }
             //cloning of the original graph
             let mut graph_initial = self.graph.clone();
+            let graph = self.graph.clone();
+            //converting the self graph in a mappedcondensedgraph
+            let mut graph_copy = MappedCondensedGraph {
+                graph: graph,
+                node_index_map: self.node_index_map.clone(),
+                edge_index_map: self.edge_index_map.clone(),
+            };
+
             let initial_map = self.node_index_map.clone();
 
-            let edge_index = self.edge_index_map[&(
+            let edge_index = graph_copy.edge_index_map[&(
                 source[0].leader,
                 last_block[0].get_call_next_target().unwrap(),
             )];
-            self.graph.remove_edge(edge_index);
-            let directed_path = self.longest_path(source).unwrap() as f32 + entry_node_latency
-                - self.longest_path(exit_block).unwrap() as f32;
+
+            graph_copy.graph.remove_edge(edge_index);
+
+            let directed_path = graph_copy.longest_path(source).unwrap() as f32 + entry_node_latency
+                - graph_copy.longest_path(exit_block).unwrap() as f32;
 
             //remove edges outgoing source block except those incoming to last block
             let mut edges_to_remove = Vec::new();

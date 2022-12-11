@@ -125,7 +125,7 @@ pub fn get_exit_jump(
                     | "c.jr"
                     | "c.jalr"
             ),
-            _ => todo!(),
+            _ => panic!("Unsupported architecture!"),
         };
 
         let operands = insn.op_str().unwrap();

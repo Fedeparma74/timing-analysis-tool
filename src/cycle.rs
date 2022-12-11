@@ -24,12 +24,19 @@ pub fn condensate_graph(
         // add edges to the cycle_graph
         for block in condensed_node.iter() {
             for target in block.get_targets() {
-                let target_block = blocks.get(&target).unwrap();
-                cycle_graph.add_edge(
-                    block.clone(),
-                    target_block.clone(),
-                    target_block.get_latency() as f32,
-                );
+                if !condensed_node
+                    .iter()
+                    .filter(|node| node.leader == target)
+                    .collect::<Vec<_>>()
+                    .is_empty()
+                {
+                    let target_block = blocks.get(&target).unwrap();
+                    cycle_graph.add_edge(
+                        block.clone(),
+                        target_block.clone(),
+                        target_block.get_latency() as f32,
+                    );
+                }
             }
         }
 
@@ -64,19 +71,12 @@ pub fn condensate_graph(
                 .is_empty()
             {
                 exit_block = exit_cycle_block;
-                cycle_graph.remove_edge(&exit_block, &outer_block);
-                cycle_graph.remove_node(&outer_block);
+               // cycle_graph.remove_edge(&exit_block, &outer_block);
+               // cycle_graph.remove_node(&outer_block);
             }
         }
 
         println!("exit_block: {:x}", exit_block.leader);
-
-        let digraph = cycle_graph.to_dot_graph();
-        let mut dot_file =
-            std::fs::File::create(format!("graph_cycle_5.dot")).expect("Unable to create file");
-        dot_file
-            .write_all(digraph.as_bytes())
-            .expect("Unable to write dot file");
 
         //let cycle_entry_block = condensed_node[0].clone(); // entry node is always the first block //FALSE
 
@@ -167,10 +167,9 @@ pub fn condensate_graph(
 
                 // get the outer block of the cyclic node (it's always only one because it's the exit condition of the cycle)
                 let outer_blocks =
-                    condensed_graph.neighbors_directed(&condensed_node, Outgoing)[0].to_owned(); // the second [0] is because if the outer block is a
-                                                                                                    //condensed node, it is mapped with the first block of the node ??? --> probably not
+                    condensed_graph.neighbors_directed(&condensed_node, Outgoing)[0].to_owned();
 
-                let mut outer_block = outer_blocks[0].clone(); // we assume that the outer node of a cycle is only one
+                let mut outer_block = outer_blocks[0].clone(); // to initialize the variable
 
                 //handle case where outer block has more than one block --> it is a condensed node
                 for block in outer_blocks {
