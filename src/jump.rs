@@ -8,7 +8,7 @@ pub enum ExitJump {
     UnconditionalAbsolute(u64),
     Indirect,
     Ret(Vec<u64>),
-    Call(u64,u64),
+    Call(u64, u64),
     Next(u64),
 }
 
@@ -47,7 +47,7 @@ impl std::fmt::Display for ExitJump {
                     write!(f, "] }}")
                 }
             }
-            ExitJump::Call(target,_) => write!(f, "Call {{ target: 0x{:x} }}", target),
+            ExitJump::Call(target, _) => write!(f, "Call {{ target: 0x{:x} }}", target),
             ExitJump::Next(target) => write!(f, "Next {{ target: 0x{:x} }}", target),
         }
     }
@@ -138,7 +138,7 @@ pub fn get_exit_jump(
                     .unwrap();
 
             if is_call {
-                return Some(ExitJump::Call(last_operand,next_insn.address()));
+                return Some(ExitJump::Call(last_operand, next_insn.address()));
             }
 
             match (is_relative, is_unconditional) {

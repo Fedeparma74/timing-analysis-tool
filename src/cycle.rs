@@ -1,3 +1,4 @@
+use petgraph::adj::EdgeIndex;
 use petgraph::Direction::{Incoming, Outgoing};
 use std::collections::HashMap;
 use std::io::Write;
@@ -14,6 +15,8 @@ pub fn condensate_graph(
     blocks: &HashMap<u64, Block>,
 ) -> MappedCondensedGraph {
     let mut condensed_graph = original_graph.condense_cycles();
+    let mut flag = true;
+    let mut overhead = 0;
 
     COUNTER.fetch_add(1, Ordering::Relaxed);
 
@@ -71,12 +74,10 @@ pub fn condensate_graph(
                 .is_empty()
             {
                 exit_block = exit_cycle_block;
-               // cycle_graph.remove_edge(&exit_block, &outer_block);
-               // cycle_graph.remove_node(&outer_block);
             }
         }
 
-        println!("exit_block: {:x}", exit_block.leader);
+        // println!("exit_block: {:x}", exit_block.leader);
 
         //let cycle_entry_block = condensed_node[0].clone(); // entry node is always the first block //FALSE
 
@@ -87,7 +88,7 @@ pub fn condensate_graph(
         let mut outer_block = outer_blocks[0].clone(); // we assume that the outer node of a cycle is only one
 
         //handling case where outer block has more than one block --> it is a condensed node
-        for block in outer_blocks {
+        for block in &outer_blocks {
             for condensed_block in &condensed_node {
                 if block.get_targets().contains(&condensed_block.leader) {
                     outer_block = block.clone();
@@ -99,14 +100,108 @@ pub fn condensate_graph(
         let mut entry_block = &cycle_entry_blocks[0]; // to initialize the variable
 
         for cycle_entry_block in cycle_entry_blocks {
-            for (source, target, _) in cycle_graph.edges_directed(&cycle_entry_block, Incoming) {
-                cycle_graph.remove_edge(&source, &target);
+            for (_, _, _) in cycle_graph.edges_directed(&cycle_entry_block, Incoming) {
+                //  cycle_graph.remove_edge(&source, &target);
                 entry_block = cycle_entry_block;
             }
         }
 
-        //print cycle_entry_block
-        println!("cycle_entry_block: {:x}", entry_block.leader);
+        let mut to_remove = Vec::<u64>::new();
+
+        if entry_block.leader != exit_block.leader {
+            //if entry block incoming edges are greater than 1, entry block is the exit block
+            let entry_block_incoming_edges =
+                condensed_graph.edges_directed(&condensed_node, Incoming);
+            for block in outer_blocks {
+                for condensed_block in &condensed_node {
+                    if block.get_targets().contains(&condensed_block.leader) {
+                        to_remove.push(block.get_call_next_target().unwrap());
+                    }
+                }
+            }
+            if entry_block_incoming_edges.len() > 0 {
+                // let mut graph_copy = cycle_graph.clone();
+
+                // let edge_index = cycle_graph.edge_index_map[&(
+                //     entry_block.leader,
+                //     entry_block_incoming_edges[0]
+                //         .0
+                //         .get_call_next_target()
+                //         .unwrap(),
+                // )];
+
+                // let mut edge_indexes = Vec::<petgraph::prelude::EdgeIndex>::new();
+                //let mut removed_leaders = Vec::<u64>::new();
+
+                // for edge in &entry_block_incoming_edges {
+                //     //let target_leader = edge.0.get_call_next_target().unwrap();
+                //     // let target_block = blocks.get(&target_leader).unwrap();
+                //     //graph_copy.remove_edge(entry_block, target_block);
+                //     //   to_remove.push(target_leader);
+                //     // println!("to remove: {:x}", target_leader);
+
+                //     // removed_leaders
+                //     //     .push(target_leader);
+
+                //     // edge_indexes.push(
+                //     //     graph_copy.edge_index_map
+                //     //         [&(entry_block.leader, edge.0.get_call_next_target().unwrap())],
+                //     // );
+                // }
+
+                // let removed_leader = entry_block_incoming_edges[0]
+                //     .0
+                //     .get_call_next_target()
+                //     .unwrap();
+
+                // for entry_block_incoming_edge in entry_block_incoming_edges {
+                //     removed_leaders
+                //         .push(entry_block_incoming_edge.0.get_call_next_target().unwrap());
+                // }
+
+                //interrupting the cycle to calculate the overhead
+                // let outgoing_nodes = graph_copy.neighbors_directed(&entry_block, Outgoing);
+                // let mut outgoing_nodes_vec = Vec::new();
+                // for node in outgoing_nodes {
+                //     if removed_leaders.contains(&node.leader) {
+                //         outgoing_nodes_vec.push(node);
+                //     }
+                // }
+
+                // for node in outgoing_nodes_vec {
+                //     removed_leaders.push(node.leader);
+                // }
+
+                // for edge in &edge_indexes {
+                //     graph_copy.graph.remove_edge(*edge);
+                // }
+                // cycle_graph.graph.remove_edge(edge_index);
+
+                let digraph = cycle_graph.to_dot_graph();
+                let mut dot_file = std::fs::File::create(format!(
+                    "graph_cycle_untouched_{}.dot",
+                    COUNTER.load(Ordering::Relaxed)
+                ))
+                .expect("Unable to create file");
+                dot_file
+                    .write_all(digraph.as_bytes())
+                    .expect("Unable to write dot file");
+
+                match cycle_graph.overhead(&entry_block, &exit_block) {
+                    Ok(directed) => overhead = directed as u32,
+                    Err(_) => panic!("Error in overhead computation"),
+                }
+                entry_block = exit_block;
+                flag = false;
+            } else {
+                panic!("Entry block has no incoming edges");
+            }
+        }
+
+        for (source, target, _) in cycle_graph.edges_directed(&entry_block, Incoming) {
+            cycle_graph.remove_edge(&source, &target);
+            //entry_block = cycle_entry_block;
+        }
 
         let digraph = cycle_graph.to_dot_graph();
         let mut dot_file = std::fs::File::create(format!(
@@ -122,12 +217,17 @@ pub fn condensate_graph(
 
         match cycle_graph.reconstruct_longest_path(
             entry_block,
-            entry_block,
+            // entry_block,
             exit_block,
             entry_node_latency as f32,
         ) {
-            Ok(cycle_node_latency) => {
+            Ok(mut cycle_node_latency) => {
                 let node_incoming_edges = condensed_graph.edges_directed(&condensed_node, Incoming);
+
+                if !flag {
+                    cycle_node_latency += overhead as f32;
+                    println!("overhead: {}", overhead);
+                }
 
                 if node_incoming_edges.is_empty() {
                     // if the node has no incoming edges, it is an entry node
@@ -186,27 +286,33 @@ pub fn condensate_graph(
                 // get the cycle exit block in the original graph
                 let exit_block = &original_graph.neighbors_directed(&outer_block, Incoming);
 
-                //find last block of condensated cycle graph
-                let mut last_block = condensed_cycle_entry_node.clone(); // we assume the last block is not condensed
-                let mut last_block_found = false;
-                while !last_block_found {
-                    let neighbors = condensed_cycle_graph.neighbors_directed(&last_block, Outgoing);
-                    if neighbors.is_empty() {
-                        last_block_found = true;
-                    } else {
-                        last_block = neighbors[0].clone();
+                //remove nodes from the cycle graph that are not part of the cycle and finding the last block
+                //     let mut last_block = condensed_cycle_entry_node.clone(); // we assume the last block is not condensed
+                for node in condensed_cycle_graph.get_nodes() {
+                    if condensed_cycle_graph
+                        .neighbors_directed(&node, Outgoing)
+                        .is_empty()
+                    {
+                        if to_remove.contains(&node[0].leader) && !flag {
+                            condensed_cycle_graph.remove_node(&node);
+                        }
                     }
                 }
 
-                let cycle_node_latency = condensed_cycle_graph
+                let mut cycle_node_latency = condensed_cycle_graph
                     .reconstruct_longest_path(
                         &condensed_cycle_entry_node,
-                        &condensed_cycle_entry_node[0],
+                        //       &condensed_cycle_entry_node[0],
                         exit_block,
-                        &last_block,
+                        //    &last_block,
                         entry_node_latency as f32,
                     )
                     .unwrap();
+
+                if !flag {
+                    cycle_node_latency += overhead as f32;
+                    println!("overhead: {}", overhead);
+                }
 
                 let node_incoming_edges = condensed_graph.edges_directed(&condensed_node, Incoming);
                 if node_incoming_edges.is_empty() {
