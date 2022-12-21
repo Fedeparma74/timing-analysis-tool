@@ -29,8 +29,8 @@ const MAX_CYCLES: u32 = 1;
 fn main() {
     dotenv::dotenv().ok(); // load .env file
 
-    let file_bytes = std::fs::read("peggio.o").unwrap(); //prova_3ret.o --> 219, prova_d --> 229,  prova_without_cycles.o --> 139, 3cicli.o --> 241, 
-    let obj_file = object::File::parse(file_bytes.as_slice()).unwrap();  //prova_2for --> 159, ooribile.o --> 230, peggio --> 266, funzioni.o --> 245, funzioni_1ciclo.o --> 252
+    let file_bytes = std::fs::read("parenthesis.o").unwrap(); //prova_3ret.o --> 219, prova_d --> 229,  prova_without_cycles.o --> 139, 3cicli.o --> 241, parenthesis.o -> 319
+    let obj_file = object::File::parse(file_bytes.as_slice()).unwrap(); //prova_2for --> 159, ooribile.o --> 230, peggio --> 266, funzioni.o --> 245, funzioni_1ciclo.o --> 252
 
     let arch = obj_file.architecture();
     let arch_mode = ArchMode::from(arch);
@@ -55,22 +55,30 @@ fn main() {
     let instructions = cs
         .disasm_all(&text_section, 0x1000)
         .expect("Failed to disassemble given code");
-
-    //print instructions to file
+    
+    //print all the instrcutions in a file
     let mut file = std::fs::File::create("instructions.txt").unwrap();
-    instructions.iter().for_each(|instruction| {
+
+    for instruction in instructions.iter() {
+        let insn_detail = cs.insn_detail(instruction).unwrap();
+        let exit_jump = get_exit_jump(instruction, &instructions[0], &insn_detail, arch_mode.arch);
         writeln!(
             file,
-            "{:x}\t{:?}",
+            "{:x} {:?} {:?} {:?}",
             instruction.address(),
-            instruction.mnemonic()
+            instruction.mnemonic().unwrap(),
+            instruction.op_str().unwrap(),
+            exit_jump
         )
         .unwrap();
-    });
+    }
 
     let mut leaders = HashSet::new();
     let mut jumps: HashMap<u64, ExitJump> = HashMap::new(); // jump_address -> ExitJump
-    let mut call_map = HashMap::<u64, Vec<u64>>::new(); // call_target_address -> return_addresses (ret)
+    let mut call_map = HashMap::<u64, u64>::new(); // call_target_address -> return_addresses (ret)
+    let mut duplicated = HashMap::<(u64, u64), (u64, u64)>::new(); // call_target_address,call_insn_address -> vec <fictious address,return_addresses>
+    let mut counter = 0;
+    let mut vacant_ret = Vec::<u64>::new();
 
     // iteration to find all leaders and exit jumps
     instructions.windows(2).for_each(|window| {
@@ -84,10 +92,12 @@ fn main() {
         // if the instruction is a jump, add the jump target address and the next instruction address to the leaders
         // Then add the jump instruction to the jumps map
         if let Some(exit_jump) = exit_jump {
-            jumps.insert(instruction.address(), exit_jump.clone());
-
-            // insert next instruction as leader
-            leaders.insert(next_instruction.address());
+            //if exit jump is not a call, insert next instruction as leader
+            if !matches!(exit_jump, ExitJump::Call(_, _)) {
+                jumps.insert(instruction.address(), exit_jump.clone());
+                // insert next instruction as leader
+                leaders.insert(next_instruction.address());
+            }
 
             match exit_jump {
                 ExitJump::UnconditionalAbsolute(target)
@@ -107,17 +117,26 @@ fn main() {
                     if next_instruction.address() != target && target != instruction.address() {
                         leaders.insert(target);
                         if let hash_map::Entry::Vacant(e) = call_map.entry(target) {
-                            e.insert(vec![next_instruction.address()]);
+                            e.insert(next_instruction.address());
                         } else {
-                            call_map
-                                .get_mut(&target)
-                                .unwrap()
-                                .push(next_instruction.address());
+                            let fictious_address = instruction.address() << 1 + counter;
+
+                            if let hash_map::Entry::Vacant(e) =
+                                duplicated.entry((target, instruction.address()))
+                            {
+                                e.insert((fictious_address, next_instruction.address()));
+                                leaders.insert(fictious_address);
+                            }
+                            counter += 1;
                         }
-                    } else {
-                        leaders.remove(&next_instruction.address());
-                        jumps.remove(&instruction.address());
+                        jumps.insert(instruction.address(), exit_jump.clone());
+                        // insert next instruction as leader
+                        leaders.insert(next_instruction.address());
                     }
+                    // } else {
+                    //     leaders.remove(&next_instruction.address());
+                    //     jumps.remove(&instruction.address());
+                    // }
                 }
                 ExitJump::Ret(_) => {}
                 ExitJump::Next(_) => {}
@@ -145,15 +164,34 @@ fn main() {
             // if the next instruction is a leader, push the current block to the list of blocks
             if leaders.contains(&next_insn.address()) {
                 if let Some(exit_jump) = jumps.get(&insn.address()) {
+                    if call_map.contains_key(&current_block.leader) {
+                        vacant_ret.push(current_block.leader);
+                    }
                     if let ExitJump::Ret(_) = exit_jump {
                         if call_map.contains_key(&current_block.leader) {
                             current_block.set_exit_jump(ExitJump::Ret(
                                 if let Some(targets) = call_map.get(&current_block.leader) {
-                                    targets.clone()
+                                    vacant_ret.pop().unwrap();
+                                    *targets //modified
                                 } else {
-                                    vec![]
+                                    0
                                 },
                             ));
+                        } else {
+                            if vacant_ret.len() > 0 {
+                                if let Some(ret) = call_map.get(&vacant_ret.pop().unwrap()) {
+                                    current_block.set_exit_jump(ExitJump::Ret(*ret));
+                                }
+                            }
+                        }
+                    } else if let ExitJump::Call(target, _) = exit_jump {
+                        if let Some((fictious_address, return_address)) =
+                            duplicated.get(&(*target, insn.address()))
+                        {
+                            current_block
+                                .set_exit_jump(ExitJump::Call(*fictious_address, *return_address));
+                        } else {
+                            current_block.set_exit_jump(exit_jump.clone());
                         }
                     } else {
                         current_block.set_exit_jump(exit_jump.clone());
@@ -179,16 +217,35 @@ fn main() {
             }
         });
 
+    // add duplicated blocks to the graph for the call targets
+    for (call_target, tuple) in duplicated.clone() {
+        if let Some(block) = blocks.clone().get(&call_target.0) {
+            let mut new_block = block.clone();
+            new_block.leader = tuple.0;
+            new_block.set_exit_jump(ExitJump::Ret(tuple.1));
+            blocks.insert(new_block.leader, new_block.clone());
+            ordered_block_leaders.push(new_block.leader);
+        }
+    }
+
     // add edges to the graph (it also adds the nodes)
     for block_leader in &ordered_block_leaders {
         let source_block = blocks.get(block_leader).unwrap();
         for target in source_block.get_targets() {
-            let target_block = blocks.get(&target).unwrap();
-            graph.add_edge(
-                source_block.clone(),
-                target_block.clone(),
-                target_block.get_latency() as f32,
-            );
+            if blocks.contains_key(&target) {
+                let target_block = blocks.get(&target).unwrap();
+                graph.add_edge(
+                    source_block.clone(),
+                    target_block.clone(),
+                    target_block.get_latency() as f32,
+                );
+            }
+            // let target_block = blocks.get(&target).unwrap();
+            // graph.add_edge(
+            //     source_block.clone(),
+            //     target_block.clone(),
+            //     target_block.get_latency() as f32,
+            // );
         }
     }
 
@@ -200,7 +257,6 @@ fn main() {
         .write_all(digraph.as_bytes())
         .expect("Unable to write dot file");
 
-    // let mut condensed_graph = graph.condense_cycles();
     let mut condensed_entry_node_latency = HashMap::<u64, u32>::new(); // block_leader -> latency
 
     let condensed_graph =
@@ -226,14 +282,12 @@ fn main() {
             None => entry_node[0].get_latency(),
         };
 
-        println!("entry node latency: {}", entry_node_latency);
-
         let max_path_latency = condensed_graph.longest_path(entry_node).unwrap() as u32;
-
-        println!("max path latency: {}", max_path_latency);
+        println!("{}", entry_node_latency);
 
         wcet = wcet.max(entry_node_latency + max_path_latency);
     }
 
     println!("WCET: {} clock cycles", wcet);
+    
 }
