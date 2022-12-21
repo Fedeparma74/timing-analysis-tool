@@ -7,7 +7,7 @@ pub enum ExitJump {
     ConditionalAbsolute { taken: u64, not_taken: u64 },
     UnconditionalAbsolute(u64),
     Indirect,
-    Ret(Vec<u64>),
+    Ret(u64), //modified
     Call(u64, u64),
     Next(u64),
 }
@@ -37,14 +37,10 @@ impl std::fmt::Display for ExitJump {
             }
             ExitJump::Indirect => write!(f, "Indirect"),
             ExitJump::Ret(targets) => {
-                if targets.is_empty() {
-                    write!(f, "Ret {{ targets: None }}")
+                if *targets != 0 {
+                    write!(f, "Ret {{ targets: 0x{:x} }}", targets)
                 } else {
-                    write!(f, "Ret {{ targets: [")?;
-                    for target in targets {
-                        write!(f, "0x{:x}, ", target)?;
-                    }
-                    write!(f, "] }}")
+                    write!(f, "Ret {{ targets: None }}")
                 }
             }
             ExitJump::Call(target, _) => write!(f, "Call {{ target: 0x{:x} }}", target),
@@ -91,24 +87,18 @@ pub fn get_exit_jump(
     if is_jump {
         let op = insn.mnemonic().unwrap();
         let is_unconditional = match arch {
-            Arch::ARM => matches!(op, "b" | "bl" | "br" | "blr" | "bcc" | "ret"),
+            Arch::ARM => matches!(op, "b" | "bl" | "br" | "bx" | "blr" | "bcc" | "ret"),
             Arch::ARM64 => matches!(op, "b" | "bl" | "br" | "blr" | "bcc" | "ret"),
-            // Arch::MIPS => match op {
-            //     "j" | "jal" | "jr" | "jalr" => true,
-            //     _ => false,
-            // },
+            Arch::MIPS => matches!(op,"j" | "jal" | "jr" | "jalr" ),
             Arch::X86 => matches!(op, "jmp" | "call" | "ret"),
-            // Arch::PPC => match op {
-            //     "b" | "bl" | "blr" | "bctr" | "bctrl" => true,
-            //     _ => false,
-            // },
-            Arch::SPARC => todo!(),
-            Arch::SYSZ => todo!(),
-            Arch::XCORE => todo!(),
-            Arch::M68K => todo!(),
-            Arch::TMS320C64X => todo!(),
-            Arch::M680X => todo!(),
-            Arch::EVM => todo!(),
+            Arch::PPC => matches!(op, "b" | "bl" | "blr" | "bctr" | "bctrl"),
+            // Arch::SPARC => matches!(op, "j" | "jal" | "jmpl" | "ret"),
+            // Arch::SYSZ => matches!(op, "j" | "jal" | "jg" | "jge" | "jl" | "jle" | "jna" | "jnae" | "jnb"),
+            // Arch::XCORE => matches!(op, "j" | "jal" | "jr" | "jral" | "jralr" | "ret"),
+            // Arch::M68K => matches!(op, "j" | "jal" | "jr" | "jra" | "jral" | "jralr" | "ret"),
+            // Arch::TMS320C64X => matches!(op, "j" | "jal" | "jr" | "jra" | "jral" | "jralr" | "ret"),
+            // Arch::M680X => matches!(op, "j" | "jal" | "jr" | "jra" | "jral" | "jralr" | "ret"),
+            // Arch::EVM => matches!(op, "j" | "jal" | "jr" | "jra" | "jral" | "jralr" | "ret"),
             Arch::RISCV => matches!(
                 op,
                 "j" | "jal"
@@ -159,7 +149,7 @@ pub fn get_exit_jump(
             }
         } else if is_ret {
             // return the last value of lastcalls and remove it from the vector
-            Some(ExitJump::Ret(vec![]))
+            Some(ExitJump::Ret(0)) //modified
         } else {
             Some(ExitJump::Indirect)
         }
