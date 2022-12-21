@@ -183,12 +183,14 @@ impl MappedGraph {
     pub fn reconstruct_longest_path(
         &self,
         source: &Block,
+        exit: &Block,
         entry_node_latency: f32,
     ) -> Result<f32, petgraph::algo::NegativeCycle> {
         match self.longest_path(&source) {
             Ok(path) => {
                 let cycle_path = path as f32 + entry_node_latency;
-                let directed_path = entry_node_latency;
+                //     let directed_path = entry_node_latency;
+                let directed_path = cycle_path - self.longest_path(exit).unwrap();
                 let total_cyle_path = cycle_path * MAX_CYCLES as f32 + directed_path;
                 return Ok(total_cyle_path);
             }
@@ -363,12 +365,13 @@ impl MappedCondensedGraph {
     pub fn reconstruct_longest_path(
         &mut self,
         source: &[Block],
+        exit: &[Block],
         entry_node_latency: f32,
     ) -> Result<f32, petgraph::algo::NegativeCycle> {
         match self.longest_path(source) {
             Ok(path) => {
                 let cycle_path = path + entry_node_latency;
-                let directed_path = entry_node_latency;
+                let directed_path = cycle_path - self.shortest_path(exit);
                 let total_cyle_path = cycle_path * MAX_CYCLES as f32 + directed_path;
                 return Ok(total_cyle_path);
             }

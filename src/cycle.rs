@@ -65,7 +65,12 @@ pub fn condensate_graph(
             }
         }
 
-        let mut outer_block = outer_blocks[0].clone(); // to initialize the variable
+        let mut outer_block = condensed_graph
+            .neighbors_directed(&condensed_node, Outgoing)
+            .to_owned()[0][0]
+            .clone(); // to initialize the variable
+
+        let mut to_remove = Vec::<Vec<Block>>::new();
 
         //handling case where there are more than one outer block
         for outer_blocks in condensed_graph
@@ -78,16 +83,16 @@ pub fn condensate_graph(
                 if !cycle_graph
                     .get_nodes()
                     .iter()
-                    .filter(|node| node.get_targets().contains(&block.leader))
+                    .filter(|node| node.get_targets().contains(&block.clone().leader))
                     .collect::<Vec<_>>()
                     .is_empty()
                 {
                     if original_graph.edges_directed(&entry_block, Outgoing)[0] //we assume that the entry node has only one outgoing edge
                         .1
                         .leader
-                        == block.leader
+                        == block.clone().leader
                     {
-                        outer_block = block;
+                        outer_block = block.clone();
                     } else {
                         remove = true;
                     }
@@ -95,7 +100,8 @@ pub fn condensate_graph(
             }
             //remove the outer node if it is not the exit node
             if remove {
-                condensed_graph.remove_node(&outer_blocks);
+                // condensed_graph.remove_node(&outer_blocks);
+                to_remove.push(outer_blocks.clone());
             }
         }
 
@@ -116,8 +122,10 @@ pub fn condensate_graph(
         }
 
         //check if entry and exit node are the same
-        if entry_block.leader != exit_block.leader {
-            panic!("entry node is not the same as exit node")
+        if entry_block.leader == exit_block.leader {
+            for outer_blocks in to_remove {
+                condensed_graph.remove_node(&outer_blocks);
+            }
         }
 
         //make the cycle acyclic
@@ -137,7 +145,11 @@ pub fn condensate_graph(
 
         let entry_node_latency = entry_block.get_latency();
 
-        match cycle_graph.reconstruct_longest_path(entry_block, entry_node_latency as f32) {
+        match cycle_graph.reconstruct_longest_path(
+            entry_block,
+            &exit_block,
+            entry_node_latency as f32,
+        ) {
             Ok(cycle_node_latency) => {
                 let node_incoming_edges = condensed_graph.edges_directed(&condensed_node, Incoming);
 
@@ -159,38 +171,25 @@ pub fn condensate_graph(
                     condensate_graph(cycle_graph.clone(), entry_node_latency_map, blocks);
 
                 // get the outer block of the cyclic node (it's always only one because it's the exit condition of the cycle)
-                let outer_blocks =
-                    condensed_graph.neighbors_directed(&condensed_node, Outgoing)[0].to_owned();
+                // let outer_blocks =
+                //     condensed_graph.neighbors_directed(&condensed_node, Outgoing)[0].to_owned();
 
-                let mut outer_block = outer_blocks[0].clone(); // to initialize the variable
+                // let mut outer_block = outer_blocks[0].clone(); // to initialize the variable
 
-                //handle case where outer block has more than one block --> it is a condensed node
-                for block in outer_blocks {
-                    if !condensed_cycle_graph
-                        .get_nodes()
-                        .iter()
-                        .filter(|node| node[0].get_targets().contains(&block.leader)) //[0] beacuse the exit node is surely not a condensed node
-                        .collect::<Vec<_>>()
-                        .is_empty()
-                    {
-                        outer_block = block;
-                    }
-                }
-                // get the cycle exit block in the original graph
-                let exit_block = &original_graph.neighbors_directed(&outer_block, Incoming);
-
-                //remove nodes from the cycle graph that are not part of the cycle and finding the last block
-                //     let mut last_block = condensed_cycle_entry_node.clone(); // we assume the last block is not condensed
-                // for node in condensed_cycle_graph.get_nodes() {
-                //     if condensed_cycle_graph
-                //         .neighbors_directed(&node, Outgoing)
+                // //handle case where outer block has more than one block --> it is a condensed node
+                // for block in outer_blocks {
+                //     if !condensed_cycle_graph
+                //         .get_nodes()
+                //         .iter()
+                //         .filter(|node| node[0].get_targets().contains(&block.leader)) //[0] beacuse the exit node is surely not a condensed node
+                //         .collect::<Vec<_>>()
                 //         .is_empty()
                 //     {
-                //         if to_remove.contains(&node[0].leader) && !flag {
-                //             condensed_cycle_graph.remove_node(&node);
-                //         }
+                //         outer_block = block;
                 //     }
                 // }
+                // get the cycle exit block in the original graph
+                // let exit_block = &original_graph.neighbors_directed(&outer_block, Incoming);
 
                 let condensed_cycle_graph_nodes = condensed_cycle_graph.get_nodes();
                 let entry_nodes = condensed_cycle_graph_nodes
@@ -211,13 +210,59 @@ pub fn condensate_graph(
                         None => condensed_cycle_entry_node[0].get_latency(),
                     };
 
-                if entry_block.leader != exit_block[0].leader {
-                    panic!("entry node is not the same as exit node")
+                let mut to_remove = Vec::<Vec<Block>>::new();
+
+                let mut outer_block = condensed_graph
+                    .neighbors_directed(&condensed_node, Outgoing)
+                    .to_owned()[0][0]
+                    .clone();
+
+                //handling case where there are more than one outer block
+                for outer_blocks in condensed_graph
+                    .neighbors_directed(&condensed_node, Outgoing)
+                    .to_owned()
+                {
+                    let mut remove = false;
+                    //handle case where outer block has more than one block --> it is a condensed node
+                    for block in outer_blocks.clone() {
+                        if !condensed_cycle_graph
+                            .get_nodes()
+                            .iter()
+                            .filter(|node| node[0].get_targets().contains(&block.leader))
+                            .collect::<Vec<_>>()
+                            .is_empty()
+                        {
+                            if original_graph.edges_directed(&entry_nodes[0][0], Outgoing)[0] //we assume that the entry node has only one outgoing edge
+                                .1
+                                .leader
+                                == block.leader
+                            {
+                                outer_block = block.clone();
+                            } else {
+                                remove = true;
+                            }
+                        }
+                    }
+
+                    //remove the outer node if it is not the exit node
+                    if remove {
+                        // condensed_cycle_graph.remove_node(&outer_blocks);
+                        to_remove.push(outer_blocks);
+                    }
+                }
+
+                let exit_block = &original_graph.neighbors_directed(&outer_block, Incoming);
+
+                if entry_block.leader == exit_block[0].leader {
+                    for node in to_remove {
+                        condensed_cycle_graph.remove_node(&node);
+                    }
                 }
 
                 let cycle_node_latency = condensed_cycle_graph
                     .reconstruct_longest_path(
                         &condensed_cycle_entry_node,
+                        exit_block,
                         entry_node_latency as f32,
                     )
                     .unwrap();
