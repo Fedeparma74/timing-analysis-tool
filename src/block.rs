@@ -46,7 +46,8 @@ impl Block {
                 }
                 ExitJump::Indirect => {}
                 ExitJump::Ret(ret_targets) => {
-                    targets.extend_from_slice(ret_targets);
+                    //targets.extend_from_slice(ret_targets); //modified
+                    targets.push(*ret_targets);
                 }
                 ExitJump::Call(target, _) => {
                     targets.push(*target);
@@ -58,17 +59,6 @@ impl Block {
         }
 
         targets
-    }
-
-    pub fn get_call_next_target(&self) -> Option<u64> {
-        if let Some(exit_jump) = &self.exit_jump {
-            match exit_jump {
-                ExitJump::Call(_, not_target) => Some(*not_target),
-                _ => None,
-            }
-        } else {
-            None
-        }
     }
 
     pub fn get_latency(&self) -> u32 {
