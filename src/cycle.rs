@@ -1,5 +1,5 @@
 use petgraph::Direction::{Incoming, Outgoing};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::io::Write;
 use std::sync::atomic::{AtomicU32, Ordering};
 
@@ -11,7 +11,7 @@ static COUNTER: AtomicU32 = AtomicU32::new(0);
 pub fn condensate_graph(
     mut original_graph: MappedGraph,
     entry_node_latency_map: &mut HashMap<u64, u32>,
-    blocks: &HashMap<u64, Block>,
+    blocks: &BTreeMap<u64, Block>,
 ) -> MappedCondensedGraph {
     let mut condensed_graph = original_graph.condense_cycles();
 
@@ -40,95 +40,63 @@ pub fn condensate_graph(
             }
         }
 
-        //finding the entry node of the cycle
-        let outer_blocks =
+        // find the entry node of the cycle
+
+        let pre_cycle_blocks =
             condensed_graph.neighbors_directed(&condensed_node, Incoming)[0].to_owned(); // it is not important which block we take, we just need one
 
-        let mut outer_block = outer_blocks[0].clone(); // to initialize the variable
+        let mut entry_block = &condensed_node[0]; // to initialize the variable
 
-        //handling case where outer block has more than one block --> it is a condensed node
-        for block in &outer_blocks {
-            for condensed_block in &condensed_node {
-                if block.get_targets().contains(&condensed_block.leader) {
-                    outer_block = block.clone();
+        // handling case where pre_cycle_block has more than one block --> it is a condensed node
+        for block in &pre_cycle_blocks {
+            for inner_block in &condensed_node {
+                if block.get_targets().contains(&inner_block.leader) {
+                    entry_block = inner_block;
                 }
             }
         }
 
-        let cycle_entry_blocks = &original_graph.neighbors_directed(&outer_block, Outgoing);
-        let mut entry_block = &cycle_entry_blocks[0]; // to initialize the variable
-
-        //handling case where the entry block has more than one block --> it is a condensed node
-        for cycle_entry_block in cycle_entry_blocks {
-            for (_, _, _) in cycle_graph.edges_directed(&cycle_entry_block, Incoming) {
-                entry_block = cycle_entry_block;
-            }
-        }
-
-        let mut outer_block = condensed_graph
+        let outer_nodes = condensed_graph
             .neighbors_directed(&condensed_node, Outgoing)
-            .to_owned()[0][0]
-            .clone(); // to initialize the variable
+            .to_owned();
 
-        let mut to_remove = Vec::<Vec<Block>>::new();
+        let mut exit_block = entry_block.clone();
 
-        //handling case where there are more than one outer block
-        for outer_blocks in condensed_graph
-            .neighbors_directed(&condensed_node, Outgoing)
-            .to_owned()
-        {
-            let mut remove = false;
-            //handle case where outer block has more than one block --> it is a condensed node
-            for block in outer_blocks.clone() {
-                if !cycle_graph
+        let mut false_outer_blocks = HashMap::<Block, Vec<Block>>::new(); // exit_block -> outer_blocks
+
+        let mut normal_cycle = false;
+        // handling case where there are more than one outer block
+        for outer_blocks in outer_nodes {
+            // handle case where outer block has more than one block --> it is a condensed node
+            for outer_block in outer_blocks.clone() {
+                if let Some(cycle_block) = cycle_graph
                     .get_nodes()
                     .iter()
-                    .filter(|node| node.get_targets().contains(&block.clone().leader))
-                    .collect::<Vec<_>>()
-                    .is_empty()
+                    .filter(|node| node.get_targets().contains(&outer_block.clone().leader))
+                    .next()
                 {
-                    if original_graph.edges_directed(&entry_block, Outgoing)[0] //we assume that the entry node has only one outgoing edge
-                        .1
-                        .leader
-                        == block.clone().leader
-                    {
-                        outer_block = block.clone();
+                    if cycle_block.leader == entry_block.leader {
+                        normal_cycle = true;
                     } else {
-                        remove = true;
+                        false_outer_blocks.insert(cycle_block.clone(), outer_blocks.clone());
                     }
+
+                    break;
                 }
             }
-            //remove the outer node if it is not the exit node
-            if remove {
-                // condensed_graph.remove_node(&outer_blocks);
-                to_remove.push(outer_blocks.clone());
-            }
         }
 
-        let exit_cycle_blocks = &original_graph.neighbors_directed(&outer_block, Incoming); //we should check if the outer node is condensed
-        let mut exit_block = &exit_cycle_blocks[0]; // to initialize the variable
-
-        //handle case where exit block has more than one block --> it is a condensed node
-        for exit_cycle_block in exit_cycle_blocks {
-            if !cycle_graph
-                .get_nodes()
-                .iter()
-                .filter(|node| node.leader == exit_cycle_block.leader)
-                .collect::<Vec<_>>()
-                .is_empty()
-            {
-                exit_block = exit_cycle_block;
+        // if the entry and exit nodes are the same
+        if normal_cycle {
+            // if the outer block is not the normal outer block, we need to remove it
+            for (_, outer_blocks) in &false_outer_blocks {
+                condensed_graph.remove_node(outer_blocks);
             }
+        } else {
+            exit_block = false_outer_blocks.keys().next().unwrap().clone();
         }
 
-        //check if entry and exit node are the same
-        if entry_block.leader == exit_block.leader {
-            for outer_blocks in to_remove {
-                condensed_graph.remove_node(&outer_blocks);
-            }
-        }
-
-        //make the cycle acyclic
+        // make the cycle acyclic
         for (source, target, _) in cycle_graph.edges_directed(&entry_block, Incoming) {
             cycle_graph.remove_edge(&source, &target);
         }
@@ -218,10 +186,7 @@ pub fn condensate_graph(
                     .clone();
 
                 //handling case where there are more than one outer block
-                for outer_blocks in condensed_graph
-                    .neighbors_directed(&condensed_node, Outgoing)
-                    .to_owned()
-                {
+                for outer_blocks in condensed_graph.neighbors_directed(&condensed_node, Outgoing) {
                     let mut remove = false;
                     //handle case where outer block has more than one block --> it is a condensed node
                     for block in outer_blocks.clone() {

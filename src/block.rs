@@ -1,7 +1,7 @@
 use crate::instruction::Instruction;
 use crate::jump::ExitJump;
 
-#[derive(Default, Clone)]
+#[derive(Default, Clone, Hash, PartialEq, Eq)]
 pub struct Block {
     pub leader: u64,
     pub instructions: Vec<Instruction>,
@@ -46,7 +46,6 @@ impl Block {
                 }
                 ExitJump::Indirect => {}
                 ExitJump::Ret(ret_targets) => {
-                    //targets.extend_from_slice(ret_targets); //modified
                     targets.push(*ret_targets);
                 }
                 ExitJump::Call(target, _) => {
@@ -69,10 +68,10 @@ impl Block {
 impl std::fmt::Display for Block {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         for insn in self.instructions.iter() {
-            writeln!(f, "{}", insn)?;
+            writeln!(f, "{insn}")?;
         }
         if let Some(exit_jump) = &self.exit_jump {
-            writeln!(f, "Exit jump: {}", exit_jump)?;
+            writeln!(f, "Exit jump: {exit_jump}")?;
         } else {
             writeln!(f, "Exit jump: None")?;
         }
@@ -83,10 +82,10 @@ impl std::fmt::Display for Block {
 impl std::fmt::Debug for Block {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         for insn in self.instructions.iter() {
-            writeln!(f, "{}", insn)?;
+            writeln!(f, "{insn}")?;
         }
         if let Some(exit_jump) = &self.exit_jump {
-            writeln!(f, "Exit jump: {}", exit_jump)?;
+            writeln!(f, "Exit jump: {exit_jump}")?;
         } else {
             writeln!(f, "Exit jump: None")?;
         }

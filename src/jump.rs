@@ -1,13 +1,13 @@
 use capstone::{Arch, Insn, InsnDetail, InsnGroupType};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub enum ExitJump {
     ConditionalRelative { taken: u64, not_taken: u64 },
     UnconditionalRelative(u64),
     ConditionalAbsolute { taken: u64, not_taken: u64 },
     UnconditionalAbsolute(u64),
     Indirect,
-    Ret(u64), //modified
+    Ret(u64),
     Call(u64, u64),
     Next(u64),
 }
@@ -18,33 +18,31 @@ impl std::fmt::Display for ExitJump {
             ExitJump::ConditionalRelative { taken, not_taken } => {
                 write!(
                     f,
-                    "ConditionalRelative {{ taken: 0x{:x}, not_taken: 0x{:x} }}",
-                    taken, not_taken
+                    "ConditionalRelative {{ taken: 0x{taken:x}, not_taken: 0x{not_taken:x} }}"
                 )
             }
             ExitJump::UnconditionalRelative(target) => {
-                write!(f, "UnconditionalRelative {{ target: 0x{:x} }}", target)
+                write!(f, "UnconditionalRelative {{ target: 0x{target:x} }}")
             }
             ExitJump::ConditionalAbsolute { taken, not_taken } => {
                 write!(
                     f,
-                    "ConditionalAbsolute {{ taken: 0x{:x}, not_taken: 0x{:x} }}",
-                    taken, not_taken
+                    "ConditionalAbsolute {{ taken: 0x{taken:x}, not_taken: 0x{not_taken:x} }}"
                 )
             }
             ExitJump::UnconditionalAbsolute(target) => {
-                write!(f, "UnconditionalAbsolute {{ target: 0x{:x} }}", target)
+                write!(f, "UnconditionalAbsolute {{ target: 0x{target:x} }}")
             }
             ExitJump::Indirect => write!(f, "Indirect"),
             ExitJump::Ret(targets) => {
                 if *targets != 0 {
-                    write!(f, "Ret {{ targets: 0x{:x} }}", targets)
+                    write!(f, "Ret {{ targets: 0x{targets:x} }}")
                 } else {
                     write!(f, "Ret {{ targets: None }}")
                 }
             }
-            ExitJump::Call(target, _) => write!(f, "Call {{ target: 0x{:x} }}", target),
-            ExitJump::Next(target) => write!(f, "Next {{ target: 0x{:x} }}", target),
+            ExitJump::Call(target, _) => write!(f, "Call {{ target: 0x{target:x} }}"),
+            ExitJump::Next(target) => write!(f, "Next {{ target: 0x{target:x} }}"),
         }
     }
 }
@@ -89,16 +87,13 @@ pub fn get_exit_jump(
         let is_unconditional = match arch {
             Arch::ARM => matches!(op, "b" | "bl" | "br" | "bx" | "blr" | "bcc" | "ret"),
             Arch::ARM64 => matches!(op, "b" | "bl" | "br" | "blr" | "bcc" | "ret"),
-            Arch::MIPS => matches!(op,"j" | "jal" | "jr" | "jalr" ),
+            Arch::MIPS => matches!(op, "j" | "jal" | "jr" | "jalr"),
             Arch::X86 => matches!(op, "jmp" | "call" | "ret"),
             Arch::PPC => matches!(op, "b" | "bl" | "blr" | "bctr" | "bctrl"),
-            // Arch::SPARC => matches!(op, "j" | "jal" | "jmpl" | "ret"),
-            // Arch::SYSZ => matches!(op, "j" | "jal" | "jg" | "jge" | "jl" | "jle" | "jna" | "jnae" | "jnb"),
-            // Arch::XCORE => matches!(op, "j" | "jal" | "jr" | "jral" | "jralr" | "ret"),
-            // Arch::M68K => matches!(op, "j" | "jal" | "jr" | "jra" | "jral" | "jralr" | "ret"),
-            // Arch::TMS320C64X => matches!(op, "j" | "jal" | "jr" | "jra" | "jral" | "jralr" | "ret"),
-            // Arch::M680X => matches!(op, "j" | "jal" | "jr" | "jra" | "jral" | "jralr" | "ret"),
-            // Arch::EVM => matches!(op, "j" | "jal" | "jr" | "jra" | "jral" | "jralr" | "ret"),
+            Arch::SPARC => matches!(
+                op,
+                "bpa" | "fbpa" | "call" | "ret" | "retl" | "rett" | "jmp" | "jmpl"
+            ),
             Arch::RISCV => matches!(
                 op,
                 "j" | "jal"
@@ -132,12 +127,8 @@ pub fn get_exit_jump(
             }
 
             match (is_relative, is_unconditional) {
-                (true, true) => Some(ExitJump::UnconditionalRelative(
-                    // insn.address() + last_operand,
-                    last_operand,
-                )),
+                (true, true) => Some(ExitJump::UnconditionalRelative(last_operand)),
                 (true, false) => Some(ExitJump::ConditionalRelative {
-                    // taken: insn.address() + last_operand,
                     taken: last_operand,
                     not_taken: next_insn.address(),
                 }),
@@ -148,8 +139,7 @@ pub fn get_exit_jump(
                 }),
             }
         } else if is_ret {
-            // return the last value of lastcalls and remove it from the vector
-            Some(ExitJump::Ret(0)) //modified
+            Some(ExitJump::Ret(0)) // the correct value can't be determined here
         } else {
             Some(ExitJump::Indirect)
         }

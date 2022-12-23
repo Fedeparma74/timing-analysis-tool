@@ -23,11 +23,35 @@ impl From<object::Architecture> for ArchMode {
             },
             object::Architecture::Arm => ArchMode {
                 arch: Arch::ARM,
+                mode: Mode::Thumb,
+            },
+            object::Architecture::Riscv64 => ArchMode {
+                arch: Arch::RISCV,
+                mode: Mode::RiscV64,
+            },
+            object::Architecture::Riscv32 => ArchMode {
+                arch: Arch::RISCV,
+                mode: Mode::RiscV32,
+            },
+            object::Architecture::Mips64 => ArchMode {
+                arch: Arch::MIPS,
+                mode: Mode::Mips64,
+            },
+            object::Architecture::Mips => ArchMode {
+                arch: Arch::MIPS,
+                mode: Mode::Mips32,
+            },
+            object::Architecture::PowerPc64 => ArchMode {
+                arch: Arch::PPC,
+                mode: Mode::Mode64,
+            },
+            object::Architecture::PowerPc => ArchMode {
+                arch: Arch::PPC,
                 mode: Mode::Mode32,
             },
-            object::Architecture::LoongArch64 => ArchMode {
-                arch: Arch::ARM,
-                mode: Mode::Mode64,
+            object::Architecture::Sparc64 => ArchMode {
+                arch: Arch::SPARC,
+                mode: Mode::V9,
             },
             _ => panic!("unsupported architecture"),
         }

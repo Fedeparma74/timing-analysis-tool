@@ -6,7 +6,7 @@ mod instruction;
 mod jump;
 
 use std::cell::RefCell;
-use std::collections::{hash_map, HashMap, HashSet};
+use std::collections::{hash_map, BTreeMap, HashMap, HashSet};
 use std::io::Write;
 
 use capstone::{Capstone, NO_EXTRA_MODE};
@@ -29,7 +29,7 @@ const MAX_CYCLES: u32 = 1;
 fn main() {
     dotenv::dotenv().ok(); // load .env file
 
-    let file_bytes = std::fs::read("parenthesis.o").unwrap(); //prova_3ret.o --> 219, prova_d --> 229,  prova_without_cycles.o --> 139, 3cicli.o --> 241, parenthesis.o -> 319
+    let file_bytes = std::fs::read("roundunico.o").unwrap(); //prova_3ret.o --> 219, prova_d --> 229,  prova_without_cycles.o --> 139, 3cicli.o --> 241, parenthesis.o -> 319
     let obj_file = object::File::parse(file_bytes.as_slice()).unwrap(); //prova_2for --> 159, ooribile.o --> 230, peggio --> 266, funzioni.o --> 245, funzioni_1ciclo.o --> 252
 
     let arch = obj_file.architecture();
@@ -38,7 +38,7 @@ fn main() {
         *current_arch.borrow_mut() = Some(arch_mode.clone());
     });
 
-    println!("{:?}", arch_mode);
+    println!("{arch_mode:?}");
 
     let mut text_section = Vec::new();
     for section in obj_file.sections() {
@@ -55,7 +55,7 @@ fn main() {
     let instructions = cs
         .disasm_all(&text_section, 0x1000)
         .expect("Failed to disassemble given code");
-    
+
     //print all the instrcutions in a file
     let mut file = std::fs::File::create("instructions.txt").unwrap();
 
@@ -76,7 +76,7 @@ fn main() {
     let mut leaders = HashSet::new();
     let mut jumps: HashMap<u64, ExitJump> = HashMap::new(); // jump_address -> ExitJump
     let mut call_map = HashMap::<u64, u64>::new(); // call_target_address -> return_addresses (ret)
-    let mut duplicated = HashMap::<(u64, u64), (u64, u64)>::new(); // call_target_address,call_insn_address -> vec <fictious address,return_addresses>
+    let mut duplicated = HashMap::<(u64, u64), (u64, u64)>::new(); // (call_target_address, call_insn_address) -> (fictious address, return_address)
     let mut counter = 0;
     let mut vacant_ret = Vec::<u64>::new();
 
@@ -92,7 +92,6 @@ fn main() {
         // if the instruction is a jump, add the jump target address and the next instruction address to the leaders
         // Then add the jump instruction to the jumps map
         if let Some(exit_jump) = exit_jump {
-            //if exit jump is not a call, insert next instruction as leader
             if !matches!(exit_jump, ExitJump::Call(_, _)) {
                 jumps.insert(instruction.address(), exit_jump.clone());
                 // insert next instruction as leader
@@ -119,7 +118,7 @@ fn main() {
                         if let hash_map::Entry::Vacant(e) = call_map.entry(target) {
                             e.insert(next_instruction.address());
                         } else {
-                            let fictious_address = instruction.address() << 1 + counter;
+                            let fictious_address = (instruction.address() << 1) + counter;
 
                             if let hash_map::Entry::Vacant(e) =
                                 duplicated.entry((target, instruction.address()))
@@ -129,14 +128,10 @@ fn main() {
                             }
                             counter += 1;
                         }
-                        jumps.insert(instruction.address(), exit_jump.clone());
+                        jumps.insert(instruction.address(), exit_jump);
                         // insert next instruction as leader
                         leaders.insert(next_instruction.address());
                     }
-                    // } else {
-                    //     leaders.remove(&next_instruction.address());
-                    //     jumps.remove(&instruction.address());
-                    // }
                 }
                 ExitJump::Ret(_) => {}
                 ExitJump::Next(_) => {}
@@ -147,9 +142,8 @@ fn main() {
     // iterate through all instructions and create the basic blocks
     let first_instruction = instructions.first().unwrap();
     let mut current_block: Block = Block::new(first_instruction.into());
-    let mut blocks = HashMap::<u64, Block>::new();
-    // we need to keep the order of the blocks to have a consistent entry point of a condensed node (HashMap is not ordered)
-    let mut ordered_block_leaders = Vec::<u64>::new();
+    // we need to keep the order of the blocks to have a consistent entry point of a condensed node
+    let mut blocks = BTreeMap::<u64, Block>::new();
 
     let mut graph = MappedGraph::new();
 
@@ -168,20 +162,12 @@ fn main() {
                         vacant_ret.push(current_block.leader);
                     }
                     if let ExitJump::Ret(_) = exit_jump {
-                        if call_map.contains_key(&current_block.leader) {
-                            current_block.set_exit_jump(ExitJump::Ret(
-                                if let Some(targets) = call_map.get(&current_block.leader) {
-                                    vacant_ret.pop().unwrap();
-                                    *targets //modified
-                                } else {
-                                    0
-                                },
-                            ));
-                        } else {
-                            if vacant_ret.len() > 0 {
-                                if let Some(ret) = call_map.get(&vacant_ret.pop().unwrap()) {
-                                    current_block.set_exit_jump(ExitJump::Ret(*ret));
-                                }
+                        if let Some(targets) = call_map.get(&current_block.leader) {
+                            vacant_ret.pop().unwrap();
+                            current_block.set_exit_jump(ExitJump::Ret(*targets));
+                        } else if !vacant_ret.is_empty() {
+                            if let Some(ret) = call_map.get(&vacant_ret.pop().unwrap()) {
+                                current_block.set_exit_jump(ExitJump::Ret(*ret));
                             }
                         }
                     } else if let ExitJump::Call(target, _) = exit_jump {
@@ -202,7 +188,6 @@ fn main() {
 
                 // insert the current block to the list of blocks
                 blocks.insert(current_block.leader, current_block.clone());
-                ordered_block_leaders.push(current_block.leader);
                 current_block = Block::new(next_insn.into());
             } else {
                 // push the instruction to the current block
@@ -213,46 +198,34 @@ fn main() {
             if index == instructions.len() - 2 {
                 current_block.add_instruction(next_insn.into());
                 blocks.insert(current_block.leader, current_block.clone());
-                ordered_block_leaders.push(current_block.leader);
             }
         });
 
     // add duplicated blocks to the graph for the call targets
-    for (call_target, tuple) in duplicated.clone() {
-        if let Some(block) = blocks.clone().get(&call_target.0) {
+    for ((call_target, _), (fictious_address, ret_address)) in duplicated {
+        if let Some(block) = blocks.clone().get(&call_target) {
             let mut new_block = block.clone();
-            new_block.leader = tuple.0;
-            new_block.set_exit_jump(ExitJump::Ret(tuple.1));
+            new_block.leader = fictious_address;
+            new_block.set_exit_jump(ExitJump::Ret(ret_address));
             blocks.insert(new_block.leader, new_block.clone());
-            ordered_block_leaders.push(new_block.leader);
         }
     }
 
     // add edges to the graph (it also adds the nodes)
-    for block_leader in &ordered_block_leaders {
-        let source_block = blocks.get(block_leader).unwrap();
-        for target in source_block.get_targets() {
-            if blocks.contains_key(&target) {
-                let target_block = blocks.get(&target).unwrap();
+    for block in blocks.values() {
+        for target in block.get_targets() {
+            if let Some(target_block) = blocks.get(&target) {
                 graph.add_edge(
-                    source_block.clone(),
+                    block.clone(),
                     target_block.clone(),
                     target_block.get_latency() as f32,
                 );
             }
-            // let target_block = blocks.get(&target).unwrap();
-            // graph.add_edge(
-            //     source_block.clone(),
-            //     target_block.clone(),
-            //     target_block.get_latency() as f32,
-            // );
         }
     }
 
     let mut dot_file = std::fs::File::create("graph.dot").expect("Unable to create file");
-
     let digraph = graph.to_dot_graph();
-
     dot_file
         .write_all(digraph.as_bytes())
         .expect("Unable to write dot file");
@@ -278,16 +251,15 @@ fn main() {
     let mut wcet: u32 = 0;
     for entry_node in entry_nodes {
         let entry_node_latency = match condensed_entry_node_latency.get(&entry_node[0].leader) {
-            Some(latency) => *latency as u32,
+            Some(latency) => *latency,
             None => entry_node[0].get_latency(),
         };
 
         let max_path_latency = condensed_graph.longest_path(entry_node).unwrap() as u32;
-        println!("{}", entry_node_latency);
+        println!("Entry node latency: {entry_node_latency}");
 
         wcet = wcet.max(entry_node_latency + max_path_latency);
     }
 
-    println!("WCET: {} clock cycles", wcet);
-    
+    println!("WCET: {wcet} clock cycles");
 }

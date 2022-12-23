@@ -2,12 +2,12 @@ use capstone::Insn;
 
 use crate::CURRENT_ARCH;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
 pub struct Instruction {
     pub address: u64,
     pub mnemonic: String,
     pub operands: (Option<String>, Option<String>),
-    pub latency: u32, // in cycles
+    pub latency: u32, // clock cycles
 }
 
 impl<'a> From<&'a Insn<'a>> for Instruction {
@@ -58,7 +58,7 @@ impl<'a> From<&'a Insn<'a>> for Instruction {
 impl std::fmt::Display for Instruction {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         let operands_str = match &self.operands {
-            (Some(op1), Some(op2)) => format!("{}, {}", op1, op2),
+            (Some(op1), Some(op2)) => format!("{op1}, {op2}"),
             (Some(op1), None) => op1.to_string(),
             _ => "".to_string(),
         };
