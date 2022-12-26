@@ -61,14 +61,12 @@ impl MappedGraph {
     pub fn remove_edge(&mut self, source: &Block, target: &Block) {
         let edge_index = self.edge_index_map[&(source.leader, target.leader)];
         self.graph.remove_edge(edge_index);
-
         self.edge_index_map.remove(&(source.leader, target.leader));
     }
 
     pub fn update_edge(&mut self, a: &Block, b: &Block, weight: f32) {
         let a_index = self.node_index_map[&a.leader];
         let b_index = self.node_index_map[&b.leader];
-
         self.graph.update_edge(a_index, b_index, weight);
     }
 
@@ -149,6 +147,28 @@ impl MappedGraph {
         Ok(min_path_latency * -1.0)
     }
 
+    pub fn reconstruct_longest_path(
+        &self,
+        source: &Block,
+        exit: &Block,
+        entry_node_latency: f32,
+    ) -> Result<f32, petgraph::algo::NegativeCycle> {
+        match self.longest_path(source) {
+            Ok(path) => {
+                let cycle_path = path + entry_node_latency;
+                let directed_path = cycle_path - self.longest_path(exit).unwrap();
+                let total_cyle_path = cycle_path * MAX_CYCLES as f32 + directed_path;
+                Ok(total_cyle_path)
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    pub fn to_dot_graph(&self) -> String {
+        let digraph = Dot::with_config(&self.graph, &[]);
+        digraph.to_string()
+    }
+
     pub fn condense_cycles(&mut self) -> MappedCondensedGraph {
         let condensed_graph = condensation(self.graph.clone().into(), true);
         let stable_condensed_graph: StableGraph<Vec<Block>, f32> = condensed_graph.into();
@@ -178,31 +198,6 @@ impl MappedGraph {
             node_index_map,
             edge_index_map,
         }
-    }
-
-    pub fn reconstruct_longest_path(
-        &self,
-        source: &Block,
-        exit: &Block,
-        entry_node_latency: f32,
-    ) -> Result<f32, petgraph::algo::NegativeCycle> {
-        match self.longest_path(source) {
-            Ok(path) => {
-                let cycle_path = path + entry_node_latency;
-                //     let directed_path = entry_node_latency;
-                let directed_path = cycle_path - self.longest_path(exit).unwrap();
-                let total_cyle_path = cycle_path * MAX_CYCLES as f32 + directed_path;
-                Ok(total_cyle_path)
-            }
-            Err(e) => {
-                Err(e)
-            }
-        }
-    }
-
-    pub fn to_dot_graph(&self) -> String {
-        let digraph = Dot::with_config(&self.graph, &[]);
-        digraph.to_string()
     }
 }
 
@@ -236,6 +231,7 @@ impl MappedCondensedGraph {
     pub fn remove_node(&mut self, blocks: &[Block]) {
         let node_index = self.node_index_map[&blocks[0].leader];
         self.graph.remove_node(node_index);
+        self.node_index_map.remove(&blocks[0].leader);
     }
 
     pub fn get_nodes(&self) -> Vec<Vec<Block>> {
@@ -268,12 +264,13 @@ impl MappedCondensedGraph {
     pub fn remove_edge(&mut self, source: &[Block], target: &[Block]) {
         let edge_index = self.edge_index_map[&(source[0].leader, target[0].leader)];
         self.graph.remove_edge(edge_index);
+        self.edge_index_map
+            .remove(&(source[0].leader, target[0].leader));
     }
 
     pub fn update_edge(&mut self, a: &[Block], b: &[Block], weight: f32) {
         let source_index = self.node_index_map[&a[0].leader];
         let target_index = self.node_index_map[&b[0].leader];
-
         self.graph.update_edge(source_index, target_index, weight);
     }
 
@@ -371,13 +368,11 @@ impl MappedCondensedGraph {
         match self.longest_path(source) {
             Ok(path) => {
                 let cycle_path = path + entry_node_latency;
-                let directed_path = cycle_path - self.shortest_path(exit);
+                let directed_path = cycle_path - self.longest_path(exit)?;
                 let total_cyle_path = cycle_path * MAX_CYCLES as f32 + directed_path;
                 Ok(total_cyle_path)
             }
-            Err(e) => {
-                Err(e)
-            }
+            Err(e) => Err(e),
         }
     }
 
