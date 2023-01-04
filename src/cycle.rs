@@ -12,12 +12,13 @@ pub fn condensate_graph(
     mut original_graph: MappedGraph,
     entry_node_latency_map: &mut HashMap<u64, u32>,
     blocks: &BTreeMap<u64, Block>,
+    recursive_functions: Vec<u64>,
 ) -> MappedCondensedGraph {
     let mut condensed_graph = original_graph.condense_cycles();
 
-    COUNTER.fetch_add(1, Ordering::Relaxed);
-
     for condensed_node in condensed_graph.get_condensed_nodes() {
+        COUNTER.fetch_add(1, Ordering::Relaxed);
+
         // create new graph with the blocks of the condensed node, acyclic
         let mut cycle_graph = MappedGraph::new();
 
@@ -42,8 +43,18 @@ pub fn condensate_graph(
 
         // find the entry node of the cycle
 
-        let pre_cycle_blocks =
-            condensed_graph.neighbors_directed(&condensed_node, Incoming)[0].to_owned(); // it is not important which block we take, we just need one
+        let mut pre_cycle_blocks = condensed_node.clone();
+
+        if condensed_graph
+            .neighbors_directed(&condensed_node, Incoming)
+            .to_owned()
+            .len()
+            > 0
+        {
+            pre_cycle_blocks =
+                condensed_graph.neighbors_directed(&condensed_node, Incoming)[0].to_owned();
+            // it is not important which block we take, we just need one
+        }
 
         let mut entry_block = &condensed_node[0]; // to initialize the variable
 
@@ -79,7 +90,6 @@ pub fn condensate_graph(
                     } else {
                         false_outer_blocks.insert(cycle_block.clone(), outer_blocks.clone());
                     }
-
                     break;
                 }
             }
@@ -92,7 +102,28 @@ pub fn condensate_graph(
                 condensed_graph.remove_node(outer_blocks);
             }
         } else {
-            exit_block = false_outer_blocks.keys().next().unwrap().clone();
+            if false_outer_blocks.len() == 0 {
+                //remove incoming edges to the entry node  of the cycle except for the pre_cycle_blocks
+                for (source, _, _) in cycle_graph.edges_directed(entry_block, Incoming) {
+                    if !pre_cycle_blocks.contains(&source) {
+                        //if it is a recursive function
+                        let mut add_block = entry_block.clone();
+                        add_block.leader = entry_block.leader>>1;
+                        cycle_graph.add_edge(
+                            source.clone(),
+                            add_block.clone(),
+                            entry_block.get_latency() as f32,
+                        );
+                        cycle_graph.add_node(add_block.clone());
+                    }
+                }
+                println!(
+                    "There is no outer block for the cycle {:x}",
+                    entry_block.leader
+                );
+            } else {
+                exit_block = false_outer_blocks.keys().next().unwrap().clone();
+            }
         }
 
         // make the cycle acyclic
@@ -107,6 +138,8 @@ pub fn condensate_graph(
         dot_file
             .write_all(digraph.as_bytes())
             .expect("Unable to write dot file");
+        
+        println!("cycle_graph_{graph_number}.dot created", graph_number = graph_number);
 
         let entry_node_latency = entry_block.get_latency();
 
@@ -135,7 +168,7 @@ pub fn condensate_graph(
             }
             Err(_) => {
                 let mut condensed_cycle_graph =
-                    condensate_graph(cycle_graph.clone(), entry_node_latency_map, blocks);
+                    condensate_graph(cycle_graph.clone(), entry_node_latency_map, blocks,recursive_functions.clone());
 
                 let condensed_cycle_graph_nodes = condensed_cycle_graph.get_nodes();
 

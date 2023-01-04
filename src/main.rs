@@ -29,7 +29,7 @@ const MAX_CYCLES: u32 = 1;
 fn main() {
     dotenv::dotenv().ok(); // load .env file
 
-    let file_bytes = std::fs::read("parenthesis.o").unwrap(); //prova_3ret.o --> 219, prova_d --> 229,  prova_without_cycles.o --> 139, 3cicli.o --> 241, parenthesis.o -> 319
+    let file_bytes = std::fs::read("ricorsiva_fib.o").unwrap(); //prova_3ret.o --> 219, prova_d --> 229,  prova_without_cycles.o --> 139, 3cicli.o --> 241, parenthesis.o -> 319
     let obj_file = object::File::parse(file_bytes.as_slice()).unwrap(); //prova_2for --> 159, ooribile.o --> 230, peggio --> 266, funzioni.o --> 245, funzioni_1ciclo.o --> 252
 
     let arch = obj_file.architecture();
@@ -118,7 +118,7 @@ fn main() {
                         if let hash_map::Entry::Vacant(e) = call_map.entry(target) {
                             e.insert(next_instruction.address());
                         } else {
-                            let fictious_address = (instruction.address() << 1) + counter;
+                            let fictious_address = instruction.address() << (1 + counter);
 
                             if let hash_map::Entry::Vacant(e) =
                                 duplicated.entry((target, instruction.address()))
@@ -201,13 +201,29 @@ fn main() {
             }
         });
 
+    let mut recursive_functions = Vec::<u64>::new();
+
     // add duplicated blocks to the graph for the call targets
     for ((call_target, _), (fictious_address, ret_address)) in duplicated {
         if let Some(block) = blocks.clone().get(&call_target) {
             let mut new_block = block.clone();
-            new_block.leader = fictious_address;
-            new_block.set_exit_jump(ExitJump::Ret(ret_address));
-            blocks.insert(new_block.leader, new_block.clone());
+
+            if let Some(ExitJump::Ret(_)) = new_block.exit_jump {
+                new_block.leader = fictious_address;
+                new_block.set_exit_jump(ExitJump::Ret(ret_address));
+                blocks.insert(new_block.leader, new_block.clone());
+            } else {
+                duplicate(
+                    &mut blocks,
+                    &mut new_block.clone(),
+                    fictious_address,
+                    ret_address,
+                    &mut recursive_functions,
+                    new_block.leader,
+                    &mut false,
+                    &mut 0,
+                );
+            }
         }
     }
 
@@ -232,8 +248,12 @@ fn main() {
 
     let mut condensed_entry_node_latency = HashMap::<u64, u32>::new(); // block_leader -> latency
 
-    let condensed_graph =
-        condensate_graph(graph.clone(), &mut condensed_entry_node_latency, &blocks);
+    let condensed_graph = condensate_graph(
+        graph.clone(),
+        &mut condensed_entry_node_latency,
+        &blocks,
+        recursive_functions,
+    );
 
     let mut dot_file = std::fs::File::create("condensed_graph.dot").expect("Unable to create file");
     let digraph = condensed_graph.to_dot_graph();
@@ -262,4 +282,72 @@ fn main() {
     }
 
     println!("WCET: {wcet} clock cycles");
+}
+
+fn duplicate(
+    blocks: &mut BTreeMap<u64, Block>,
+    source: &mut Block,
+    fictious_address: u64,
+    ret_address: u64,
+    recursive_functions: &mut Vec<u64>,
+    call_target_address: u64,
+    found: &mut bool,
+    ret: &mut u64,
+) {
+    let source_fictious_address = fictious_address;
+    let mut fictious_address = fictious_address << 1 + 1;
+
+    //duplicate and add to blocks all targets of the source block until a return is found
+    for target in source.get_targets() {
+        if let Some(target_block) = blocks.clone().get(&target) {
+            //to modify one target of the source block with the new fictious address of the duplicated target block
+            source.modify_targets(fictious_address, target);
+
+            if let Some(ExitJump::Ret(_)) = target_block.exit_jump {
+                if !*found {
+                    let mut new_block = target_block.clone();
+                    new_block.leader = fictious_address;
+                    new_block.set_exit_jump(ExitJump::Ret(ret_address));
+                    blocks.insert(new_block.leader, new_block.clone());
+                    //modify found to true to avoid adding the same block twice
+                    *found = true;
+                    *ret = fictious_address;
+                } else {
+                    source.modify_targets(*ret, target);
+                }
+            } else {
+                let mut new_block = target_block.clone();
+
+                if target_block
+                    .get_targets()
+                    .iter()
+                    .any(|x| *x == call_target_address || *x == source.leader)
+                {
+                    if let Some(ExitJump::Call(_, _)) = target_block.exit_jump {
+                        println!("recursive function at {:x}!!", call_target_address);
+                        recursive_functions.push(call_target_address);
+                    } else {
+                        new_block.leader = fictious_address;
+                        new_block.modify_targets(source_fictious_address, source.leader);
+                        blocks.insert(new_block.leader, new_block.clone());
+                    }
+                } else {
+                    duplicate(
+                        blocks,
+                        &mut new_block,
+                        fictious_address,
+                        ret_address,
+                        recursive_functions,
+                        call_target_address,
+                        found,
+                        ret,
+                    );
+                }
+            }
+        }
+
+        fictious_address = fictious_address + 1;
+    }
+    source.leader = source_fictious_address;
+    blocks.insert(source.leader, source.clone());
 }
