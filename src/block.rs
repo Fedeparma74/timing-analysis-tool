@@ -60,6 +60,61 @@ impl Block {
         targets
     }
 
+    pub fn modify_targets(&mut self, new_target: u64, target: u64) {
+        if let Some(exit_jump) = &mut self.clone().exit_jump {
+            match exit_jump {
+                ExitJump::ConditionalRelative {
+                    taken,
+                    not_taken,
+                } => {
+                    if taken == &target {
+                        self.set_exit_jump(ExitJump::ConditionalRelative {
+                            taken: new_target,
+                            not_taken: *not_taken,
+                        });
+                    } else if not_taken == &target {
+                        self.set_exit_jump(ExitJump::ConditionalRelative {
+                            taken: *taken,
+                            not_taken: new_target,
+                        });
+                    }
+                }
+                ExitJump::UnconditionalRelative(_) => {
+                    self.set_exit_jump(ExitJump::UnconditionalRelative(new_target));
+                }
+                ExitJump::ConditionalAbsolute {
+                    taken,
+                    not_taken,
+                } => {
+                    if taken == &target {
+                        self.set_exit_jump(ExitJump::ConditionalAbsolute {
+                            taken: new_target,
+                            not_taken: *not_taken,
+                        });
+                    } else if not_taken == &target {
+                        self.set_exit_jump(ExitJump::ConditionalAbsolute {
+                            taken: *taken,
+                            not_taken: new_target,
+                        });
+                    }
+                }
+                ExitJump::UnconditionalAbsolute(_) => {
+                    self.set_exit_jump(ExitJump::UnconditionalAbsolute(new_target));
+                }
+                ExitJump::Indirect => {}
+                ExitJump::Ret(_) => {
+                    self.set_exit_jump(ExitJump::Ret(new_target));
+                }
+                ExitJump::Call(_, ret) => {
+                    self.set_exit_jump(ExitJump::Call(new_target, *ret));
+                }
+                ExitJump::Next(_) => {
+                    self.set_exit_jump(ExitJump::Next(new_target));
+                }
+            }
+        }
+    }
+
     pub fn get_latency(&self) -> u32 {
         self.instructions.iter().map(|i| i.latency).sum()
     }

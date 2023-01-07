@@ -1,3 +1,5 @@
+#[macro_use]
+
 mod arch;
 mod block;
 mod cycle;
@@ -20,16 +22,21 @@ use crate::cycle::condensate_graph;
 use crate::graph::MappedGraph;
 use crate::jump::ExitJump;
 
+#[macro_export]
+macro_rules! printwarning {
+    ($($arg:tt)*) => {
+        println!("WARNING: {}", format_args!($($arg)*))
+    };
+}
+
 thread_local! {
     static CURRENT_ARCH: RefCell<Option<ArchMode>> = RefCell::new(None);
 }
 
-const MAX_CYCLES: u32 = 1;
-
 fn main() {
     dotenv::dotenv().ok(); // load .env file
 
-    let file_bytes = std::fs::read("parenthesis.o").unwrap(); //prova_3ret.o --> 219, prova_d --> 229,  prova_without_cycles.o --> 139, 3cicli.o --> 241, parenthesis.o -> 319
+    let file_bytes = std::fs::read("ricorsiva_all.o").unwrap(); //prova_3ret.o --> 219, prova_d --> 229,  prova_without_cycles.o --> 139, 3cicli.o --> 241, parenthesis.o -> 319
     let obj_file = object::File::parse(file_bytes.as_slice()).unwrap(); //prova_2for --> 159, ooribile.o --> 230, peggio --> 266, funzioni.o --> 245, funzioni_1ciclo.o --> 252
 
     let arch = obj_file.architecture();
@@ -118,7 +125,7 @@ fn main() {
                         if let hash_map::Entry::Vacant(e) = call_map.entry(target) {
                             e.insert(next_instruction.address());
                         } else {
-                            let fictious_address = (instruction.address() << 1) + counter;
+                            let fictious_address = instruction.address() << (1 + counter);
 
                             if let hash_map::Entry::Vacant(e) =
                                 duplicated.entry((target, instruction.address()))
@@ -201,13 +208,32 @@ fn main() {
             }
         });
 
+    let mut recursive_functions = HashMap::<u64, u64>::new();
+    let mut fictious_map = HashMap::<u64, u64>::new(); // real_address -> fictious address
+
     // add duplicated blocks to the graph for the call targets
     for ((call_target, _), (fictious_address, ret_address)) in duplicated {
         if let Some(block) = blocks.clone().get(&call_target) {
             let mut new_block = block.clone();
-            new_block.leader = fictious_address;
-            new_block.set_exit_jump(ExitJump::Ret(ret_address));
-            blocks.insert(new_block.leader, new_block.clone());
+
+            if let Some(ExitJump::Ret(_)) = new_block.exit_jump {
+                new_block.leader = fictious_address;
+                new_block.set_exit_jump(ExitJump::Ret(ret_address));
+                blocks.insert(new_block.leader, new_block.clone());
+            } else {
+                let mut visited_nodes = HashMap::<u64, u64>::new();
+
+                duplicate(
+                    &mut blocks,
+                    &mut new_block.clone(),
+                    fictious_address,
+                    ret_address,
+                    &mut recursive_functions,
+                    new_block.leader,
+                    &mut visited_nodes,
+                    &mut fictious_map,
+                );
+            }
         }
     }
 
@@ -231,9 +257,17 @@ fn main() {
         .expect("Unable to write dot file");
 
     let mut condensed_entry_node_latency = HashMap::<u64, u32>::new(); // block_leader -> latency
+    let mut latency_map = HashMap::<u64, u32>::new(); // ret_address -> latency
 
-    let condensed_graph =
-        condensate_graph(graph.clone(), &mut condensed_entry_node_latency, &blocks);
+    // condense the graph
+    let condensed_graph = condensate_graph(
+        graph.clone(),
+        &mut condensed_entry_node_latency,
+        &blocks,
+        &recursive_functions,
+        &mut latency_map,
+        &mut fictious_map,
+    );
 
     let mut dot_file = std::fs::File::create("condensed_graph.dot").expect("Unable to create file");
     let digraph = condensed_graph.to_dot_graph();
@@ -241,7 +275,7 @@ fn main() {
         .write_all(digraph.as_bytes())
         .expect("Unable to write dot file");
 
-    // find all the entry nodes
+    // find all the entry nodes of the condesed graph
     let condensed_graph_nodes = condensed_graph.get_nodes();
     let entry_nodes = condensed_graph_nodes
         .iter()
@@ -249,7 +283,8 @@ fn main() {
         .collect::<Vec<_>>();
 
     let mut wcet: u32 = 0;
-    for entry_node in entry_nodes {
+    let mut recursive_delay: u32 = 0;
+    for entry_node in entry_nodes.clone() {
         let entry_node_latency = match condensed_entry_node_latency.get(&entry_node[0].leader) {
             Some(latency) => *latency,
             None => entry_node[0].get_latency(),
@@ -258,8 +293,82 @@ fn main() {
         let max_path_latency = condensed_graph.longest_path(entry_node).unwrap() as u32;
         println!("Entry node latency: {entry_node_latency}");
 
-        wcet = wcet.max(entry_node_latency + max_path_latency);
+        if let Some(ret_address) = recursive_functions.get(&entry_node[0].leader) {
+            recursive_delay += *latency_map.get(ret_address).unwrap();
+        } else {
+            //calculating the wcet only if the entry node is not a recursive function
+            wcet = wcet.max(entry_node_latency + max_path_latency);
+        }
     }
 
+    wcet += recursive_delay;
+
     println!("WCET: {wcet} clock cycles");
+
+}
+
+fn duplicate(
+    blocks: &mut BTreeMap<u64, Block>,
+    source: &mut Block,
+    fictious_address: u64,
+    ret_address: u64,
+    recursive_functions: &mut HashMap<u64, u64>, // leader -> ret_address
+    call_target_address: u64,
+    visited_nodes: &mut HashMap<u64, u64>, // real_address -> fictious address
+    fictious_map: &mut HashMap<u64, u64>,  // fictious_address -> real_address
+) {
+    visited_nodes.insert(source.leader, fictious_address);
+    fictious_map.insert(fictious_address, source.leader);
+    let source_fictious_address = fictious_address;
+    let mut fictious_address = fictious_address << 1 + 1;
+
+    //duplicate and add to blocks all targets of the source block until a return is found
+    for target in source.get_targets() {
+        if let Some(target_block) = blocks.clone().get(&target) {
+            //to modify one target of the source block with the new fictious address of the duplicated target block
+            source.modify_targets(fictious_address, target);
+            visited_nodes.insert(target, fictious_address);
+            fictious_map.insert(fictious_address, target);
+
+            if let Some(ExitJump::Ret(_)) = target_block.exit_jump {
+                let mut new_block = target_block.clone();
+                new_block.leader = fictious_address;
+                new_block.set_exit_jump(ExitJump::Ret(ret_address));
+                blocks.insert(new_block.leader, new_block.clone());
+            } else {
+                let mut new_block = target_block.clone();
+
+                if let Some(x) = target_block
+                    .get_targets()
+                    .iter()
+                    .find(|x| visited_nodes.contains_key(x))
+                {
+                    if let Some(ExitJump::Call(_, ret_address)) = target_block.exit_jump {
+                        if *x == call_target_address {
+                            recursive_functions.insert(call_target_address, ret_address);
+                        }
+                    } //else {
+                    new_block.leader = fictious_address;
+                    new_block.modify_targets(*visited_nodes.get(x).unwrap(), *x);
+                    blocks.insert(new_block.leader, new_block.clone());
+                    //  }
+                } else {
+                    duplicate(
+                        blocks,
+                        &mut new_block,
+                        fictious_address,
+                        ret_address,
+                        recursive_functions,
+                        call_target_address,
+                        visited_nodes,
+                        fictious_map,
+                    );
+                }
+            }
+        }
+
+        fictious_address = fictious_address + 1;
+    }
+    source.leader = source_fictious_address;
+    blocks.insert(source.leader, source.clone());
 }
