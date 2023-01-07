@@ -8,7 +8,7 @@ pub enum ExitJump {
     UnconditionalAbsolute(u64),
     Indirect,
     Ret(u64),
-    Call(u64, u64),
+    Call(u64, u64), // target, return address
     Next(u64),
 }
 

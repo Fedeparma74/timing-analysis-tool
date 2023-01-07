@@ -5,6 +5,8 @@ use std::sync::atomic::{AtomicU32, Ordering};
 
 use crate::block::Block;
 use crate::graph::{MappedCondensedGraph, MappedGraph};
+use crate::jump::ExitJump;
+use crate::printwarning;
 
 static COUNTER: AtomicU32 = AtomicU32::new(0);
 
@@ -12,7 +14,9 @@ pub fn condensate_graph(
     mut original_graph: MappedGraph,
     entry_node_latency_map: &mut HashMap<u64, u32>,
     blocks: &BTreeMap<u64, Block>,
-    recursive_functions: Vec<u64>,
+    recursive_functions: &HashMap<u64, u64>, // function_address -> ret_address
+    latency_map: &mut HashMap<u64, u32>,     // ret_address -> latency
+    fictious_map: &mut HashMap<u64, u64>,    // fictious_address -> real_address
 ) -> MappedCondensedGraph {
     let mut condensed_graph = original_graph.condense_cycles();
 
@@ -42,17 +46,13 @@ pub fn condensate_graph(
         }
 
         // find the entry node of the cycle
-
         let mut pre_cycle_blocks = condensed_node.clone();
 
-        if condensed_graph
+        if let Some(incomings) = condensed_graph
             .neighbors_directed(&condensed_node, Incoming)
-            .to_owned()
-            .len()
-            > 0
+            .get(0)
         {
-            pre_cycle_blocks =
-                condensed_graph.neighbors_directed(&condensed_node, Incoming)[0].to_owned();
+            pre_cycle_blocks = incomings.to_owned();
             // it is not important which block we take, we just need one
         }
 
@@ -65,6 +65,37 @@ pub fn condensate_graph(
                     entry_block = inner_block;
                 }
             }
+        }
+
+        let mut max_cycles = 1;
+        if let Some(real_entry_address) = fictious_map.get(&entry_block.leader) {
+            let env_var_key = format!("CYCLE_0x{real_entry_address:x}");
+            if let Ok(cycle_var) = std::env::var(&env_var_key) {
+                match cycle_var.parse::<u32>() {
+                    Ok(cycle_var) => max_cycles = cycle_var,
+                    Err(_) => {
+                        panic!(
+                            "The environment variable {} is not a valid number",
+                            env_var_key
+                        );
+                    }
+                }
+            };
+        } else {
+            let env_var_key = format!("CYCLE_0x{:x}",entry_block.leader);
+            if let Ok(cycle_var) = std::env::var(&env_var_key) {
+                match cycle_var.parse::<u32>() {
+                    Ok(cycle_var) => max_cycles = cycle_var,
+                    Err(_) => {
+                        panic!(
+                            "The environment variable {} is not a valid number",
+                            env_var_key
+                        );
+                    }
+                }
+            };
+            printwarning!("Found a cycle at address {:x} -> {max_cycles} cycle iterations considered for the wcet calculation. \
+            If you want to change the value, please set the env var CYCLE_0x{:x}", entry_block.leader, entry_block.leader);
         }
 
         let outer_nodes = condensed_graph
@@ -100,29 +131,27 @@ pub fn condensate_graph(
             // if the outer block is not the normal outer block, we need to remove it
             for outer_blocks in false_outer_blocks.values() {
                 condensed_graph.remove_node(outer_blocks);
+                printwarning!(
+                    "We are not considering the exit block {:x} as exit from the cycle {:x}",
+                    outer_blocks[0].leader,
+                    entry_block.leader
+                );
             }
         } else {
             if false_outer_blocks.len() == 0 {
-                //remove incoming edges to the entry node  of the cycle except for the pre_cycle_blocks
-                for (source, _, _) in cycle_graph.edges_directed(entry_block, Incoming) {
-                    if !pre_cycle_blocks.contains(&source) {
-                        //if it is a recursive function
-                        let mut add_block = entry_block.clone();
-                        add_block.leader = entry_block.leader>>1;
-                        cycle_graph.add_edge(
-                            source.clone(),
-                            add_block.clone(),
-                            entry_block.get_latency() as f32,
-                        );
-                        cycle_graph.add_node(add_block.clone());
-                    }
-                }
-                println!(
+                printwarning!(
                     "There is no outer block for the cycle {:x}",
                     entry_block.leader
                 );
             } else {
-                exit_block = false_outer_blocks.keys().next().unwrap().clone();
+                if false_outer_blocks.len() > 1 {
+                    printwarning!(
+                        "There are more than one outer block for the cycle {:x} and we are using {:x}",
+                        entry_block.leader, exit_block.leader
+                    );
+                } else {
+                    exit_block = false_outer_blocks.keys().next().unwrap().clone();
+                }
             }
         }
 
@@ -138,8 +167,11 @@ pub fn condensate_graph(
         dot_file
             .write_all(digraph.as_bytes())
             .expect("Unable to write dot file");
-        
-        println!("cycle_graph_{graph_number}.dot created", graph_number = graph_number);
+
+        println!(
+            "cycle_graph_{graph_number}.dot created",
+            graph_number = graph_number
+        );
 
         let entry_node_latency = entry_block.get_latency();
 
@@ -147,9 +179,41 @@ pub fn condensate_graph(
             entry_block,
             &exit_block,
             entry_node_latency as f32,
+            max_cycles,
         ) {
             Ok(cycle_node_latency) => {
                 let node_incoming_edges = condensed_graph.edges_directed(&condensed_node, Incoming);
+
+                let mut max_cycles = 1;
+
+                // check if it is a ret
+                if let Some(ExitJump::Ret(current_ret_address)) = entry_block.exit_jump {
+                    for (recursive_address, ret_address) in recursive_functions {
+                        if current_ret_address == *ret_address {
+                            let env_var_key = format!("RECURSIVE_0x{recursive_address:x}");
+                            if let Ok(recursive_var) = std::env::var(&env_var_key) {
+                                match recursive_var.parse::<u32>() {
+                                    Ok(recursive_var) => max_cycles = recursive_var,
+                                    Err(_) => {
+                                        panic!(
+                                            "The environment variable {} is not a valid number",
+                                            env_var_key
+                                        );
+                                    }
+                                }
+                            };
+                            printwarning!(
+                                "Found a recursive function at address 0x{recursive_address:x} -> {max_cycles} function iterations \
+                                considered for the wcet calculation. If you want to change this value, set the environment \
+                                variable {env_var_key}"
+                                );
+                        }
+                    }
+                    latency_map.insert(
+                        current_ret_address,
+                        cycle_node_latency as u32 * max_cycles - entry_node_latency,
+                    );
+                }
 
                 if node_incoming_edges.is_empty() {
                     // if the condensed node has no incoming edges, it is the entry node
@@ -167,8 +231,14 @@ pub fn condensate_graph(
                 }
             }
             Err(_) => {
-                let mut condensed_cycle_graph =
-                    condensate_graph(cycle_graph.clone(), entry_node_latency_map, blocks,recursive_functions.clone());
+                let mut condensed_cycle_graph = condensate_graph(
+                    cycle_graph.clone(),
+                    entry_node_latency_map,
+                    blocks,
+                    recursive_functions,
+                    latency_map,
+                    fictious_map,
+                );
 
                 let condensed_cycle_graph_nodes = condensed_cycle_graph.get_nodes();
 
@@ -182,6 +252,25 @@ pub fn condensate_graph(
                     .collect::<Vec<_>>();
 
                 let condensed_cycle_entry_node = entry_nodes[0].clone(); // as this is a cycle we are sure that it has only one entry node
+
+                let mut max_cycles = 1;
+
+                if let Some(real_entry_address) =
+                    fictious_map.get(&condensed_cycle_entry_node[0].leader)
+                {
+                    let env_var_key = format!("CYCLE_0x{real_entry_address:x}");
+                    if let Ok(cycle_var) = std::env::var(&env_var_key) {
+                        match cycle_var.parse::<u32>() {
+                            Ok(cycle_var) => max_cycles = cycle_var,
+                            Err(_) => {
+                                panic!(
+                                    "The environment variable {} is not a valid number",
+                                    env_var_key
+                                );
+                            }
+                        }
+                    };
+                }
 
                 let entry_node_latency =
                     match entry_node_latency_map.get(&condensed_cycle_entry_node[0].leader) {
@@ -226,9 +315,20 @@ pub fn condensate_graph(
                     // if the outer block is not the normal outer block, we need to remove it
                     for outer_blocks in false_outer_blocks.values() {
                         condensed_cycle_graph.remove_node(outer_blocks);
+                        println!(
+                            "We are not considering the exit block {:x} as exit from the cycle {:x}",
+                            outer_blocks[0].leader,
+                            condensed_cycle_entry_node[0].leader
+                        );
                     }
                 } else {
-                    condensed_cycle_exit_node = false_outer_nodes.keys().next().unwrap().clone();
+                    //TODO
+                    if false_outer_blocks.len() == 0 || false_outer_blocks.len() > 1 {
+                        println!("check this case");
+                    } else {
+                        condensed_cycle_exit_node =
+                            false_outer_nodes.keys().next().unwrap().clone();
+                    }
                 }
 
                 let cycle_node_latency = condensed_cycle_graph
@@ -236,8 +336,40 @@ pub fn condensate_graph(
                         &condensed_cycle_entry_node,
                         &condensed_cycle_exit_node,
                         entry_node_latency as f32,
+                        max_cycles,
                     )
                     .unwrap();
+
+                let mut max_rec_cycles = 1;
+
+                // check if it is a ret
+                if let Some(ExitJump::Ret(current_ret_address)) = entry_block.exit_jump {
+                    for (recursive_address, ret_address) in recursive_functions {
+                        if current_ret_address == *ret_address {
+                            let env_var_key = format!("RECURSIVE_0x{recursive_address:x}");
+                            if let Ok(recursive_var) = std::env::var(&env_var_key) {
+                                match recursive_var.parse::<u32>() {
+                                    Ok(recursive_var) => max_rec_cycles = recursive_var,
+                                    Err(_) => {
+                                        panic!(
+                                            "The environment variable {} is not a valid number",
+                                            env_var_key
+                                        );
+                                    }
+                                }
+                            };
+                            printwarning!(
+                                "Found a recursive function at address 0x{recursive_address:x} -> {max_rec_cycles} function iterations \
+                                considered for the wcet calculation. If you want to change this value, set the environment \
+                                variable {env_var_key}"
+                                );
+                        }
+                    }
+                    latency_map.insert(
+                        current_ret_address,
+                        cycle_node_latency as u32 * max_rec_cycles - entry_node_latency,
+                    );
+                }
 
                 let node_incoming_edges = condensed_graph.edges_directed(&condensed_node, Incoming);
                 if node_incoming_edges.is_empty() {

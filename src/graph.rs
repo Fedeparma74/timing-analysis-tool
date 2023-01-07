@@ -9,7 +9,6 @@ use petgraph::visit::EdgeRef;
 use petgraph::Direction;
 
 use crate::block::Block;
-use crate::MAX_CYCLES;
 
 #[derive(Debug, Clone)]
 pub struct MappedGraph {
@@ -152,12 +151,14 @@ impl MappedGraph {
         source: &Block,
         exit: &Block,
         entry_node_latency: f32,
+        max_cycles: u32,
     ) -> Result<f32, petgraph::algo::NegativeCycle> {
         match self.longest_path(source) {
             Ok(path) => {
                 let cycle_path = path + entry_node_latency;
                 let directed_path = cycle_path - self.longest_path(exit).unwrap();
-                let total_cyle_path = cycle_path * MAX_CYCLES as f32 + directed_path;
+                let total_cyle_path = cycle_path * max_cycles as f32 + directed_path;
+
                 Ok(total_cyle_path)
             }
             Err(e) => Err(e),
@@ -364,12 +365,14 @@ impl MappedCondensedGraph {
         source: &[Block],
         exit: &[Block],
         entry_node_latency: f32,
+        max_cycles: u32,
     ) -> Result<f32, petgraph::algo::NegativeCycle> {
         match self.longest_path(source) {
             Ok(path) => {
                 let cycle_path = path + entry_node_latency;
                 let directed_path = cycle_path - self.longest_path(exit)?;
-                let total_cyle_path = cycle_path * MAX_CYCLES as f32 + directed_path;
+                let total_cyle_path = cycle_path * max_cycles as f32 + directed_path;
+
                 Ok(total_cyle_path)
             }
             Err(e) => Err(e),
