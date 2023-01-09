@@ -36,7 +36,7 @@ thread_local! {
 fn main() {
     dotenv::dotenv().ok(); // load .env file
 
-    let file_bytes = std::fs::read("ricorsiva_all.o").unwrap(); //prova_3ret.o --> 219, prova_d --> 229,  prova_without_cycles.o --> 139, 3cicli.o --> 241, parenthesis.o -> 319
+    let file_bytes = std::fs::read("ricorsiva.o").unwrap(); //prova_3ret.o --> 219, prova_d --> 229,  prova_without_cycles.o --> 139, 3cicli.o --> 241, parenthesis.o -> 319
     let obj_file = object::File::parse(file_bytes.as_slice()).unwrap(); //prova_2for --> 159, ooribile.o --> 230, peggio --> 266, funzioni.o --> 245, funzioni_1ciclo.o --> 252
 
     let arch = obj_file.architecture();
@@ -138,6 +138,8 @@ fn main() {
                         jumps.insert(instruction.address(), exit_jump);
                         // insert next instruction as leader
                         leaders.insert(next_instruction.address());
+                    }else{
+                        printwarning!("External Call instruction at address 0x{:x} ignored", instruction.address());
                     }
                 }
                 ExitJump::Ret(_) => {}
@@ -228,6 +230,7 @@ fn main() {
                     &mut new_block.clone(),
                     fictious_address,
                     ret_address,
+                    *call_map.get(&call_target).unwrap(),
                     &mut recursive_functions,
                     new_block.leader,
                     &mut visited_nodes,
@@ -284,6 +287,21 @@ fn main() {
 
     let mut wcet: u32 = 0;
     let mut recursive_delay: u32 = 0;
+    let mut count = 0;
+
+    if entry_nodes.is_empty() {
+        printwarning!("No entry nodes found");
+    } else if entry_nodes.len() > 1 {
+        for entry in entry_nodes.clone() {
+            if !recursive_functions.contains_key(&entry[0].leader) {
+                count += 1;
+            }
+        }
+        if count > 1 {
+            printwarning!("More than one entry node found");
+        }
+    }
+
     for entry_node in entry_nodes.clone() {
         let entry_node_latency = match condensed_entry_node_latency.get(&entry_node[0].leader) {
             Some(latency) => *latency,
@@ -291,27 +309,34 @@ fn main() {
         };
 
         let max_path_latency = condensed_graph.longest_path(entry_node).unwrap() as u32;
-        println!("Entry node latency: {entry_node_latency}");
 
         if let Some(ret_address) = recursive_functions.get(&entry_node[0].leader) {
             recursive_delay += *latency_map.get(ret_address).unwrap();
         } else {
             //calculating the wcet only if the entry node is not a recursive function
             wcet = wcet.max(entry_node_latency + max_path_latency);
+            println!("Entry node latency: {entry_node_latency}");
+
+            if count > 1 {
+                println!(
+                    "WCET: {wcet} clock cycles for the graph starting at entry node: 0x{:x}",
+                    entry_node[0].leader
+                );
+            }
         }
     }
 
     wcet += recursive_delay;
 
     println!("WCET: {wcet} clock cycles");
-
 }
 
 fn duplicate(
     blocks: &mut BTreeMap<u64, Block>,
     source: &mut Block,
     fictious_address: u64,
-    ret_address: u64,
+    ret_address: u64,          // return address of the duplicated function
+    original_ret_address: u64, // return address of the original function
     recursive_functions: &mut HashMap<u64, u64>, // leader -> ret_address
     call_target_address: u64,
     visited_nodes: &mut HashMap<u64, u64>, // real_address -> fictious address
@@ -330,7 +355,13 @@ fn duplicate(
             visited_nodes.insert(target, fictious_address);
             fictious_map.insert(fictious_address, target);
 
-            if let Some(ExitJump::Ret(_)) = target_block.exit_jump {
+            let mut current_ret = 0;
+
+            if let Some(ExitJump::Ret(ret)) = target_block.exit_jump {
+                current_ret = ret;
+            }
+
+            if current_ret == original_ret_address {
                 let mut new_block = target_block.clone();
                 new_block.leader = fictious_address;
                 new_block.set_exit_jump(ExitJump::Ret(ret_address));
@@ -358,6 +389,7 @@ fn duplicate(
                         &mut new_block,
                         fictious_address,
                         ret_address,
+                        original_ret_address,
                         recursive_functions,
                         call_target_address,
                         visited_nodes,
