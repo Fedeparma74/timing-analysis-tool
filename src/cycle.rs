@@ -144,11 +144,21 @@ pub fn condensate_graph(
                     entry_block.leader
                 );
             } else {
-                if false_outer_blocks.len() > 1 {
+                if false_outer_blocks.len() > 1 { //TODO
+
+                    // find the block with the highest leader and use it as exit block
+                    for possible_exit_block in false_outer_blocks.keys() {
+                        let current_leader = possible_exit_block.leader;
+                        if current_leader > exit_block.leader {
+                            exit_block = possible_exit_block.clone();
+                        }
+                    }
+
                     printwarning!(
-                        "There are more than one outer block for the cycle {:x} and we are using {:x}",
-                        entry_block.leader, exit_block.leader
+                        "There are more than one outer block for the cycle {:x} and we are considering {:x}",
+                        entry_block.leader, exit_block.leader 
                     );
+
                 } else {
                     exit_block = false_outer_blocks.keys().next().unwrap().clone();
                 }
