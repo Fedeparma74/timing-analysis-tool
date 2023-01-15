@@ -63,10 +63,7 @@ impl Block {
     pub fn modify_targets(&mut self, new_target: u64, target: u64) {
         if let Some(exit_jump) = &mut self.clone().exit_jump {
             match exit_jump {
-                ExitJump::ConditionalRelative {
-                    taken,
-                    not_taken,
-                } => {
+                ExitJump::ConditionalRelative { taken, not_taken } => {
                     if taken == &target {
                         self.set_exit_jump(ExitJump::ConditionalRelative {
                             taken: new_target,
@@ -82,10 +79,7 @@ impl Block {
                 ExitJump::UnconditionalRelative(_) => {
                     self.set_exit_jump(ExitJump::UnconditionalRelative(new_target));
                 }
-                ExitJump::ConditionalAbsolute {
-                    taken,
-                    not_taken,
-                } => {
+                ExitJump::ConditionalAbsolute { taken, not_taken } => {
                     if taken == &target {
                         self.set_exit_jump(ExitJump::ConditionalAbsolute {
                             taken: new_target,

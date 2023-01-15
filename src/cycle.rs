@@ -29,12 +29,7 @@ pub fn condensate_graph(
         // add edges to the cycle_graph
         for block in condensed_node.iter() {
             for target in block.get_targets() {
-                if !condensed_node
-                    .iter()
-                    .filter(|node| node.leader == target)
-                    .collect::<Vec<_>>()
-                    .is_empty()
-                {
+                if condensed_node.iter().any(|node| node.leader == target) {
                     let target_block = blocks.get(&target).unwrap();
                     cycle_graph.add_edge(
                         block.clone(),
@@ -82,7 +77,7 @@ pub fn condensate_graph(
                 }
             };
         } else {
-            let env_var_key = format!("CYCLE_0x{:x}",entry_block.leader);
+            let env_var_key = format!("CYCLE_0x{:x}", entry_block.leader);
             if let Ok(cycle_var) = std::env::var(&env_var_key) {
                 match cycle_var.parse::<u32>() {
                     Ok(cycle_var) => max_cycles = cycle_var,
@@ -94,7 +89,7 @@ pub fn condensate_graph(
                     }
                 }
             };
-            printwarning!("Found a cycle at address {:x} -> {max_cycles} cycle iterations considered for the wcet calculation. \
+            printwarning!("Found a cycle at address 0x{:x} -> {max_cycles} cycle iterations considered for the wcet calculation. \
             If you want to change the value, please set the env var CYCLE_0x{:x}", entry_block.leader, entry_block.leader);
         }
 
@@ -132,27 +127,31 @@ pub fn condensate_graph(
             for outer_blocks in false_outer_blocks.values() {
                 condensed_graph.remove_node(outer_blocks);
                 printwarning!(
-                    "We are not considering the exit block {:x} as exit from the cycle {:x}",
+                    "We are not considering the exit block 0x{:x} as exit from the cycle 0x{:x}",
                     outer_blocks[0].leader,
                     entry_block.leader
                 );
             }
-        } else {
-            if false_outer_blocks.len() == 0 {
-                printwarning!(
-                    "There is no outer block for the cycle {:x}",
-                    entry_block.leader
-                );
-            } else {
-                if false_outer_blocks.len() > 1 {
-                    printwarning!(
-                        "There are more than one outer block for the cycle {:x} and we are using {:x}",
-                        entry_block.leader, exit_block.leader
-                    );
-                } else {
-                    exit_block = false_outer_blocks.keys().next().unwrap().clone();
+        } else if false_outer_blocks.is_empty() {
+            printwarning!(
+                "There is no outer block for the cycle 0x{:x}",
+                entry_block.leader
+            );
+        } else if false_outer_blocks.len() > 1 {
+            // find the block with the highest leader and use it as exit block
+            for possible_exit_block in false_outer_blocks.keys() {
+                let current_leader = possible_exit_block.leader;
+                if current_leader > exit_block.leader {
+                    exit_block = possible_exit_block.clone();
                 }
             }
+
+            printwarning!(
+                "There are more than one outer block for the cycle 0x{:x} and we are considering 0x{:x}",
+                entry_block.leader, exit_block.leader
+            );
+        } else {
+            exit_block = false_outer_blocks.keys().next().unwrap().clone();
         }
 
         // make the cycle acyclic
@@ -167,11 +166,6 @@ pub fn condensate_graph(
         dot_file
             .write_all(digraph.as_bytes())
             .expect("Unable to write dot file");
-
-        println!(
-            "cycle_graph_{graph_number}.dot created",
-            graph_number = graph_number
-        );
 
         let entry_node_latency = entry_block.get_latency();
 
@@ -315,20 +309,32 @@ pub fn condensate_graph(
                     // if the outer block is not the normal outer block, we need to remove it
                     for outer_blocks in false_outer_blocks.values() {
                         condensed_cycle_graph.remove_node(outer_blocks);
-                        println!(
-                            "We are not considering the exit block {:x} as exit from the cycle {:x}",
+                        printwarning!(
+                            "We are not considering the exit block 0x{:x} as exit from the cycle 0x{:x}",
                             outer_blocks[0].leader,
                             condensed_cycle_entry_node[0].leader
                         );
                     }
-                } else {
-                    //TODO
-                    if false_outer_blocks.len() == 0 || false_outer_blocks.len() > 1 {
-                        println!("check this case");
-                    } else {
-                        condensed_cycle_exit_node =
-                            false_outer_nodes.keys().next().unwrap().clone();
+                } else if false_outer_blocks.is_empty() {
+                    printwarning!(
+                        "There is no outer block for the cycle 0x{:x}",
+                        condensed_cycle_entry_node[0].leader
+                    );
+                } else if false_outer_blocks.len() > 1 {
+                    // find the block with the highest leader and use it as exit block
+                    for possible_exit_block in false_outer_blocks.keys() {
+                        let current_leader = possible_exit_block.leader;
+                        if current_leader > condensed_cycle_exit_node[0].leader {
+                            condensed_cycle_exit_node[0] = possible_exit_block.clone();
+                        }
                     }
+
+                    printwarning!(
+                        "There are more than one outer block for the cycle 0x{:x} and we are considering 0x{:x}",
+                        condensed_cycle_entry_node[0].leader, condensed_cycle_exit_node[0].leader
+                    );
+                } else {
+                    condensed_cycle_exit_node = false_outer_nodes.keys().next().unwrap().clone();
                 }
 
                 let cycle_node_latency = condensed_cycle_graph
