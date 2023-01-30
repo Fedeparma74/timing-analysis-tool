@@ -205,7 +205,7 @@ pub fn condensate_graph(
                     }
                     latency_map.insert(
                         current_ret_address,
-                        cycle_node_latency as u32 * max_cycles - entry_node_latency,
+                        (cycle_node_latency  as u32 - entry_node_latency) * max_cycles,
                     );
                 }
 
@@ -365,8 +365,8 @@ pub fn condensate_graph(
                                 }
                             };
                             printwarning!(
-                                "Found a recursive function at address 0x{recursive_address:x} -> {max_rec_cycles} function iterations \
-                                considered for the wcet calculation. If you want to change this value, set the environment \
+                                "Found a recursive function with multiple recursion at address 0x{recursive_address:x} -> {max_rec_cycles} function iterations \
+                                considered for the wcet calculation for every recursion (PESSIMISTIC APPROACH). If you want to change this value, set the environment \
                                 variable {env_var_key}"
                                 );
                         }
@@ -392,8 +392,6 @@ pub fn condensate_graph(
                         current_ret_address,
                         (cycle_node_latency as u32 - entry_node_latency) * max_rec_cycles + ret_latency as u32 * (max_rec_cycles - 1),
                     );
-
-                    println!("latency_map: {:?}", latency_map);
                 }
 
                 let node_incoming_edges = condensed_graph.edges_directed(&condensed_node, Incoming);
