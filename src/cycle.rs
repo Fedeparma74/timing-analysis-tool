@@ -205,7 +205,7 @@ pub fn condensate_graph(
                     }
                     latency_map.insert(
                         current_ret_address,
-                        (cycle_node_latency  as u32 - entry_node_latency) * max_cycles,
+                        (cycle_node_latency as u32 - entry_node_latency) * max_cycles,
                     );
                 }
 
@@ -349,7 +349,7 @@ pub fn condensate_graph(
                 let mut max_rec_cycles = 1;
 
                 // check if it is a ret //condesed_cycle_entry_node[0]???
-                if let Some(ExitJump::Ret(current_ret_address)) = entry_block.exit_jump { 
+                if let Some(ExitJump::Ret(current_ret_address)) = entry_block.exit_jump {
                     for (recursive_address, ret_address) in recursive_functions {
                         if current_ret_address == *ret_address {
                             let env_var_key = format!("RECURSIVE_0x{recursive_address:x}");
@@ -373,25 +373,35 @@ pub fn condensate_graph(
                     }
 
                     //find the ret/next pattern of a recursive function
-                    let mut ret_latency : u64 =0;
+                    let mut ret_latency: u64 = 0;
                     for node in condensed_cycle_graph.get_nodes() {
                         if let Some(ExitJump::Ret(_)) = node[0].exit_jump {
                             if node[0].leader != entry_block.leader {
-                                let next_block = condensed_cycle_graph.neighbors_directed(&node, Outgoing)[0][0].clone();
+                                let next_block = condensed_cycle_graph
+                                    .neighbors_directed(&node, Outgoing)[0][0]
+                                    .clone();
                                 if let Some(ExitJump::Next(_)) = next_block.exit_jump {
-                                        ret_latency += node[0].get_latency() as u64;
-                                        ret_latency += next_block.get_latency() as u64;
-                                        println!("ret_latency: {}", ret_latency);
-                                        break;
+                                    ret_latency += node[0].get_latency() as u64;
+                                    ret_latency += next_block.get_latency() as u64;
+                                    println!("ret_latency: {}", ret_latency);
+                                    break;
                                 }
                             }
                         }
                     }
-                    
-                    latency_map.insert(
-                        current_ret_address,
-                        (cycle_node_latency as u32 - entry_node_latency) * max_rec_cycles + ret_latency as u32 * (max_rec_cycles - 1),
-                    );
+
+                    if max_rec_cycles > 0 {
+                        latency_map.insert(
+                            current_ret_address,
+                            (cycle_node_latency as u32 - entry_node_latency) * max_rec_cycles
+                                + ret_latency as u32 * (max_rec_cycles - 1),
+                        );
+                    } else {
+                        latency_map.insert(
+                            current_ret_address,
+                            (cycle_node_latency as u32 - entry_node_latency) * max_rec_cycles,
+                        );
+                    }
                 }
 
                 let node_incoming_edges = condensed_graph.edges_directed(&condensed_node, Incoming);
