@@ -211,7 +211,7 @@ pub fn calculate_wcet(cs: &Capstone, arch_mode: &ArchMode, instructions: &Instru
     }
 
     let mut dot_file =
-        std::fs::File::create("{graph_dir}/graph.dot").expect("Unable to create file");
+        std::fs::File::create(format!("{graph_dir}/graph.dot")).expect("Unable to create file");
     let digraph = graph.to_dot_graph();
     dot_file
         .write_all(digraph.as_bytes())
@@ -230,8 +230,8 @@ pub fn calculate_wcet(cs: &Capstone, arch_mode: &ArchMode, instructions: &Instru
         &mut fictious_map,
     );
 
-    let mut dot_file =
-        std::fs::File::create("{graph_dir}/condensed_graph.dot").expect("Unable to create file");
+    let mut dot_file = std::fs::File::create(format!("{graph_dir}/condensed_graph.dot"))
+        .expect("Unable to create file");
     let digraph = condensed_graph.to_dot_graph();
     dot_file
         .write_all(digraph.as_bytes())

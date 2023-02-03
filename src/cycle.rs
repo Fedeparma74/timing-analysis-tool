@@ -69,10 +69,7 @@ pub fn condensate_graph(
                 match cycle_var.parse::<u32>() {
                     Ok(cycle_var) => max_cycles = cycle_var,
                     Err(_) => {
-                        panic!(
-                            "The environment variable {} is not a valid number",
-                            env_var_key
-                        );
+                        panic!("The environment variable {env_var_key} is not a valid number");
                     }
                 }
             };
@@ -82,10 +79,7 @@ pub fn condensate_graph(
                 match cycle_var.parse::<u32>() {
                     Ok(cycle_var) => max_cycles = cycle_var,
                     Err(_) => {
-                        panic!(
-                            "The environment variable {} is not a valid number",
-                            env_var_key
-                        );
+                        panic!("The environment variable {env_var_key} is not a valid number");
                     }
                 }
             };
@@ -193,8 +187,7 @@ pub fn condensate_graph(
                                     Ok(recursive_var) => max_cycles = recursive_var,
                                     Err(_) => {
                                         panic!(
-                                            "The environment variable {} is not a valid number",
-                                            env_var_key
+                                            "The environment variable {env_var_key} is not a valid number"
                                         );
                                     }
                                 }
@@ -261,8 +254,7 @@ pub fn condensate_graph(
                             Ok(cycle_var) => max_cycles = cycle_var,
                             Err(_) => {
                                 panic!(
-                                    "The environment variable {} is not a valid number",
-                                    env_var_key
+                                    "The environment variable {env_var_key} is not a valid number"
                                 );
                             }
                         }
@@ -361,8 +353,7 @@ pub fn condensate_graph(
                                     Ok(recursive_var) => max_rec_cycles = recursive_var,
                                     Err(_) => {
                                         panic!(
-                                            "The environment variable {} is not a valid number",
-                                            env_var_key
+                                            "The environment variable {env_var_key} is not a valid number"
                                         );
                                     }
                                 }
@@ -387,7 +378,7 @@ pub fn condensate_graph(
                                     if let Some(ExitJump::Next(_)) = next_block.exit_jump {
                                         ret_latency += node[0].get_latency() as u64;
                                         ret_latency += next_block.get_latency() as u64;
-                                        println!("ret_latency: {}", ret_latency);
+                                        println!("ret_latency: {ret_latency}");
                                         break;
                                     }
                                 }
