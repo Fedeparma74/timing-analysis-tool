@@ -28,6 +28,8 @@ thread_local! {
     static CURRENT_ARCH: RefCell<Option<ArchMode>> = RefCell::new(None);
 }
 
+const GRAPHS_DIR: &str = "graphs";
+
 fn main() {
     dotenv::dotenv().ok(); // load .env file
 

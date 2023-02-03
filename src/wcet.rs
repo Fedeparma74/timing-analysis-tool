@@ -109,6 +109,7 @@ pub fn calculate_wcet(cs: &Capstone, arch_mode: &ArchMode, instructions: &Instru
                     if call_map.contains_key(&current_block.leader) {
                         vacant_ret.push(current_block.leader);
                     }
+
                     if let ExitJump::Ret(_) = exit_jump {
                         if let Some(targets) = call_map.get(&current_block.leader) {
                             vacant_ret.pop().unwrap();
@@ -132,6 +133,9 @@ pub fn calculate_wcet(cs: &Capstone, arch_mode: &ArchMode, instructions: &Instru
                     }
                 } else {
                     current_block.set_exit_jump(ExitJump::Next(next_insn.address()));
+                    if call_map.contains_key(&current_block.leader) {
+                        vacant_ret.push(current_block.leader);
+                    }
                 }
 
                 // insert the current block to the list of blocks
@@ -192,7 +196,22 @@ pub fn calculate_wcet(cs: &Capstone, arch_mode: &ArchMode, instructions: &Instru
         }
     }
 
-    let mut dot_file = std::fs::File::create("graph.dot").expect("Unable to create file");
+    let graph_dir = crate::GRAPHS_DIR;
+    if !std::path::Path::new(graph_dir).exists() {
+        std::fs::create_dir(graph_dir).expect("Unable to create graph directory");
+    } else {
+        // remove old files
+        for entry in std::fs::read_dir(graph_dir).expect("Unable to read graph directory") {
+            let entry = entry.expect("Unable to read graph directory");
+            let path = entry.path();
+            if path.is_file() {
+                std::fs::remove_file(path).expect("Unable to remove file");
+            }
+        }
+    }
+
+    let mut dot_file =
+        std::fs::File::create("{graph_dir}/graph.dot").expect("Unable to create file");
     let digraph = graph.to_dot_graph();
     dot_file
         .write_all(digraph.as_bytes())
@@ -211,7 +230,8 @@ pub fn calculate_wcet(cs: &Capstone, arch_mode: &ArchMode, instructions: &Instru
         &mut fictious_map,
     );
 
-    let mut dot_file = std::fs::File::create("condensed_graph.dot").expect("Unable to create file");
+    let mut dot_file =
+        std::fs::File::create("{graph_dir}/condensed_graph.dot").expect("Unable to create file");
     let digraph = condensed_graph.to_dot_graph();
     dot_file
         .write_all(digraph.as_bytes())

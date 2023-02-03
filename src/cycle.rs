@@ -159,10 +159,13 @@ pub fn condensate_graph(
             cycle_graph.remove_edge(&source, &target);
         }
 
+        let graph_dir = crate::GRAPHS_DIR;
+
         let digraph = cycle_graph.to_dot_graph();
         let graph_number = COUNTER.load(Ordering::Relaxed);
-        let mut dot_file = std::fs::File::create(format!("cycle_graph_{graph_number}.dot"))
-            .expect("Unable to create file");
+        let mut dot_file =
+            std::fs::File::create(format!("{graph_dir}/cycle_graph_{graph_number}.dot"))
+                .expect("Unable to create file");
         dot_file
             .write_all(digraph.as_bytes())
             .expect("Unable to write dot file");
@@ -205,7 +208,7 @@ pub fn condensate_graph(
                     }
                     latency_map.insert(
                         current_ret_address,
-                        cycle_node_latency as u32 * max_cycles - entry_node_latency,
+                        (cycle_node_latency as u32 - entry_node_latency) * max_cycles,
                     );
                 }
 
@@ -348,7 +351,7 @@ pub fn condensate_graph(
 
                 let mut max_rec_cycles = 1;
 
-                // check if it is a ret
+                // check if it is a ret cycle
                 if let Some(ExitJump::Ret(current_ret_address)) = entry_block.exit_jump {
                     for (recursive_address, ret_address) in recursive_functions {
                         if current_ret_address == *ret_address {
@@ -365,16 +368,43 @@ pub fn condensate_graph(
                                 }
                             };
                             printwarning!(
-                                "Found a recursive function at address 0x{recursive_address:x} -> {max_rec_cycles} function iterations \
-                                considered for the wcet calculation. If you want to change this value, set the environment \
+                                "Found a recursive function with multiple recursion at address 0x{recursive_address:x} -> {max_rec_cycles} function iterations \
+                                considered for the wcet calculation for every recursion (PESSIMISTIC APPROACH). If you want to change this value, set the environment \
                                 variable {env_var_key}"
                                 );
                         }
                     }
-                    latency_map.insert(
-                        current_ret_address,
-                        cycle_node_latency as u32 * max_rec_cycles - entry_node_latency,
-                    );
+
+                    if max_rec_cycles > 0 {
+                        //find the ret/next pattern of a recursive function
+                        let mut ret_latency: u64 = 0;
+                        for node in condensed_cycle_graph.get_nodes() {
+                            if let Some(ExitJump::Ret(_)) = node[0].exit_jump {
+                                if node[0].leader != entry_block.leader {
+                                    let next_block = condensed_cycle_graph
+                                        .neighbors_directed(&node, Outgoing)[0][0]
+                                        .clone();
+                                    if let Some(ExitJump::Next(_)) = next_block.exit_jump {
+                                        ret_latency += node[0].get_latency() as u64;
+                                        ret_latency += next_block.get_latency() as u64;
+                                        println!("ret_latency: {}", ret_latency);
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+
+                        latency_map.insert(
+                            current_ret_address,
+                            (cycle_node_latency as u32 - entry_node_latency + ret_latency as u32)
+                                * max_rec_cycles,
+                        );
+                    } else {
+                        latency_map.insert(
+                            current_ret_address,
+                            (cycle_node_latency as u32 - entry_node_latency) * max_rec_cycles,
+                        );
+                    }
                 }
 
                 let node_incoming_edges = condensed_graph.edges_directed(&condensed_node, Incoming);
@@ -392,9 +422,10 @@ pub fn condensate_graph(
                 }
 
                 let digraph = condensed_cycle_graph.to_dot_graph();
-                let mut dot_file =
-                    std::fs::File::create(format!("condensed_cycle_graph_{graph_number}.dot"))
-                        .expect("Unable to create file");
+                let mut dot_file = std::fs::File::create(format!(
+                    "{graph_dir}/condensed_cycle_graph_{graph_number}.dot"
+                ))
+                .expect("Unable to create file");
                 dot_file
                     .write_all(digraph.as_bytes())
                     .expect("Unable to write dot file");
