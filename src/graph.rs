@@ -34,9 +34,10 @@ impl MappedGraph {
     }
 
     pub fn remove_node(&mut self, block: &Block) {
-        let node_index = self.node_index_map[&block.leader];
-        self.graph.remove_node(node_index);
-        self.node_index_map.remove(&block.leader);
+        if let Some(node_index) = self.node_index_map.get(&block.leader) {
+            self.graph.remove_node(*node_index);
+            self.node_index_map.remove(&block.leader);
+        }
     }
 
     pub fn get_nodes(&self) -> Vec<Block> {
@@ -58,9 +59,10 @@ impl MappedGraph {
     }
 
     pub fn remove_edge(&mut self, source: &Block, target: &Block) {
-        let edge_index = self.edge_index_map[&(source.leader, target.leader)];
-        self.graph.remove_edge(edge_index);
-        self.edge_index_map.remove(&(source.leader, target.leader));
+        if let Some(edge_index) = self.edge_index_map.get(&(source.leader, target.leader)) {
+            self.graph.remove_edge(*edge_index);
+            self.edge_index_map.remove(&(source.leader, target.leader));
+        }
     }
 
     pub fn update_edge(&mut self, a: &Block, b: &Block, weight: f32) {
@@ -230,9 +232,10 @@ impl MappedCondensedGraph {
     }
 
     pub fn remove_node(&mut self, blocks: &[Block]) {
-        let node_index = self.node_index_map[&blocks[0].leader];
-        self.graph.remove_node(node_index);
-        self.node_index_map.remove(&blocks[0].leader);
+        if let Some(node_index) = self.node_index_map.get(&blocks[0].leader) {
+            self.graph.remove_node(*node_index);
+            self.node_index_map.remove(&blocks[0].leader);
+        }
     }
 
     pub fn get_nodes(&self) -> Vec<Vec<Block>> {
@@ -263,10 +266,14 @@ impl MappedCondensedGraph {
     }
 
     pub fn remove_edge(&mut self, source: &[Block], target: &[Block]) {
-        let edge_index = self.edge_index_map[&(source[0].leader, target[0].leader)];
-        self.graph.remove_edge(edge_index);
-        self.edge_index_map
-            .remove(&(source[0].leader, target[0].leader));
+        if let Some(edge_index) = self
+            .edge_index_map
+            .get(&(source[0].leader, target[0].leader))
+        {
+            self.graph.remove_edge(*edge_index);
+            self.edge_index_map
+                .remove(&(source[0].leader, target[0].leader));
+        }
     }
 
     pub fn update_edge(&mut self, a: &[Block], b: &[Block], weight: f32) {

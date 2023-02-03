@@ -159,10 +159,13 @@ pub fn condensate_graph(
             cycle_graph.remove_edge(&source, &target);
         }
 
+        let graph_dir = crate::GRAPHS_DIR;
+
         let digraph = cycle_graph.to_dot_graph();
         let graph_number = COUNTER.load(Ordering::Relaxed);
-        let mut dot_file = std::fs::File::create(format!("cycle_graph_{graph_number}.dot"))
-            .expect("Unable to create file");
+        let mut dot_file =
+            std::fs::File::create(format!("{graph_dir}/cycle_graph_{graph_number}.dot"))
+                .expect("Unable to create file");
         dot_file
             .write_all(digraph.as_bytes())
             .expect("Unable to write dot file");
@@ -373,7 +376,6 @@ pub fn condensate_graph(
                     }
 
                     if max_rec_cycles > 0 {
-
                         //find the ret/next pattern of a recursive function
                         let mut ret_latency: u64 = 0;
                         for node in condensed_cycle_graph.get_nodes() {
@@ -394,10 +396,9 @@ pub fn condensate_graph(
 
                         latency_map.insert(
                             current_ret_address,
-                            (cycle_node_latency as u32 - entry_node_latency) * max_rec_cycles
-                                + ret_latency as u32 * (max_rec_cycles - 1),
+                            (cycle_node_latency as u32 - entry_node_latency + ret_latency as u32)
+                                * max_rec_cycles,
                         );
-
                     } else {
                         latency_map.insert(
                             current_ret_address,
@@ -421,9 +422,10 @@ pub fn condensate_graph(
                 }
 
                 let digraph = condensed_cycle_graph.to_dot_graph();
-                let mut dot_file =
-                    std::fs::File::create(format!("condensed_cycle_graph_{graph_number}.dot"))
-                        .expect("Unable to create file");
+                let mut dot_file = std::fs::File::create(format!(
+                    "{graph_dir}/condensed_cycle_graph_{graph_number}.dot"
+                ))
+                .expect("Unable to create file");
                 dot_file
                     .write_all(digraph.as_bytes())
                     .expect("Unable to write dot file");
