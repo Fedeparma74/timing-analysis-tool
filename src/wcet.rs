@@ -19,6 +19,12 @@ pub fn calculate_wcet(cs: &Capstone, arch_mode: &ArchMode, instructions: &Instru
     let mut counter = 0;
     let mut vacant_ret = Vec::<u64>::new();
 
+    let mut insns_addresses = HashSet::new();
+
+    instructions.iter().for_each(|insn| {
+        insns_addresses.insert(insn.address());
+    });
+
     // iteration to find all leaders and exit jumps
     instructions.windows(2).for_each(|window| {
         let instruction = &window[0];
@@ -56,7 +62,10 @@ pub fn calculate_wcet(cs: &Capstone, arch_mode: &ArchMode, instructions: &Instru
                     );
                 }
                 ExitJump::Call(target, _) => {
-                    if next_instruction.address() != target && target != instruction.address() {
+                    if next_instruction.address() != target
+                        && target != instruction.address()
+                        && insns_addresses.contains(&target)
+                    {
                         leaders.insert(target);
                         if let hash_map::Entry::Vacant(e) = call_map.entry(target) {
                             e.insert(next_instruction.address());
@@ -239,10 +248,22 @@ pub fn calculate_wcet(cs: &Capstone, arch_mode: &ArchMode, instructions: &Instru
 
     // find all the entry nodes of the condesed graph
     let condensed_graph_nodes = condensed_graph.get_nodes();
-    let entry_nodes = condensed_graph_nodes
+    let mut entry_nodes = condensed_graph_nodes
         .iter()
         .filter(|node| condensed_graph.edges_directed(node, Incoming).is_empty())
         .collect::<Vec<_>>();
+
+    let graph_nodes = graph.get_nodes();
+    let original_entry_nodes = graph_nodes
+        .iter()
+        .filter(|node| graph.edges_directed(node, Incoming).is_empty())
+        .collect::<Vec<_>>();
+
+    //filtering entry nodes excluding false ones, which can be created by exit blocks' removals
+    entry_nodes.retain(|node| {
+        original_entry_nodes.contains(&&node[0])
+            || recursive_functions.contains_key(&node[0].leader)
+    });
 
     let mut wcet: u32 = 0;
     let mut recursive_delay: u32 = 0;

@@ -379,7 +379,6 @@ impl MappedCondensedGraph {
                 let cycle_path = path + entry_node_latency;
                 let directed_path = cycle_path - self.longest_path(exit)?;
                 let total_cyle_path = cycle_path * max_cycles as f32 + directed_path;
-
                 Ok(total_cyle_path)
             }
             Err(e) => Err(e),
