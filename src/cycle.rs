@@ -176,10 +176,7 @@ pub fn condensate_graph(
                 match cycle_var.parse::<u32>() {
                     Ok(cycle_var) => max_cycles = cycle_var,
                     Err(_) => {
-                        panic!(
-                            "The environment variable {} is not a valid number",
-                            env_var_key
-                        );
+                        panic!("The environment variable {env_var_key} is not a valid number");
                     }
                 }
             };
@@ -189,10 +186,7 @@ pub fn condensate_graph(
                 match cycle_var.parse::<u32>() {
                     Ok(cycle_var) => max_cycles = cycle_var,
                     Err(_) => {
-                        panic!(
-                            "The environment variable {} is not a valid number",
-                            env_var_key
-                        );
+                        panic!("The environment variable {env_var_key} is not a valid number");
                     }
                 }
             };
@@ -466,9 +460,7 @@ pub fn condensate_graph(
 
                         latency_map.insert(
                             current_ret_address,
-                            (cycle_node_latency as u32
-                                - entry_node_latency as u32
-                                - ret_latency as u32
+                            (cycle_node_latency as u32 - entry_node_latency - ret_latency as u32
                                 + ret_latency as u32 * max_rec_cycles)
                                 * max_rec_cycles,
                         );

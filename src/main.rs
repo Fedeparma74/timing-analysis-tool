@@ -9,7 +9,6 @@ mod jump;
 mod wcet;
 
 use std::cell::RefCell;
-use std::io::Write;
 
 use capstone::{Capstone, NO_EXTRA_MODE};
 use object::{Object, ObjectSection};
@@ -35,8 +34,8 @@ fn main() {
 
     let file_name = std::env::args().nth(1).expect("File name not found"); // read the file name from the command line argument
 
-    let file_bytes = std::fs::read(file_name).expect("File not found!"); //prova_3ret.o --> 219, prova_d --> 229,  prova_without_cycles.o --> 139, 3cicli.o --> 241, parenthesis.o -> 319
-    let obj_file = object::File::parse(file_bytes.as_slice()).unwrap(); //prova_2for --> 159, ooribile.o --> 230, peggio --> 266, funzioni.o --> 245, funzioni_1ciclo.o --> 252
+    let file_bytes = std::fs::read(file_name).expect("File not found!");
+    let obj_file = object::File::parse(file_bytes.as_slice()).unwrap();
 
     let arch = obj_file.architecture();
     let arch_mode = ArchMode::from(arch);
@@ -62,13 +61,6 @@ fn main() {
     let instructions = cs
         .disasm_all(&text_section, 0x1000)
         .expect("Failed to disassemble given code");
-
-    //print all the instrcutions in a file
-    let mut file = std::fs::File::create("instructions.txt").unwrap();
-
-    for instruction in instructions.iter() {
-        writeln!(file, "{instruction}").unwrap();
-    }
 
     let wcet = calculate_wcet(&cs, &arch_mode, &instructions);
 
