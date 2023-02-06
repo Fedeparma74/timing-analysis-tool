@@ -20,7 +20,16 @@ pub fn condensate_graph(
 ) -> MappedCondensedGraph {
     let mut condensed_graph = original_graph.condense_cycles();
 
-    for condensed_node in condensed_graph.get_condensed_nodes() {
+    let mut condensed_nodes = condensed_graph.get_condensed_nodes();
+
+    //adding self cycles nodes
+    for node in condensed_graph.get_nodes() {
+        if node[0].get_targets().contains(&node[0].leader) {
+            condensed_nodes.push(node.clone());
+        }
+    }
+
+    for condensed_node in condensed_nodes {
         COUNTER.fetch_add(1, Ordering::Relaxed);
 
         // create new graph with the blocks of the condensed node, acyclic
@@ -42,14 +51,14 @@ pub fn condensate_graph(
 
         let incomings_vec = condensed_graph.neighbors_directed(&condensed_node, Incoming);
 
-        let mut entry_blocks = Vec::new();
+        let mut entry_blocks = HashMap::new();
 
         // handling case where pre_cycle_block has more than one block --> it is a condensed node
         for pre_cycle_blocks in &incomings_vec {
             for block in pre_cycle_blocks {
                 for inner_block in &condensed_node {
                     if block.get_targets().contains(&inner_block.leader) {
-                        entry_blocks.push(inner_block.clone());
+                        entry_blocks.insert(inner_block.leader, inner_block.clone());
                     }
                 }
             }
@@ -59,9 +68,14 @@ pub fn condensate_graph(
             .neighbors_directed(&condensed_node, Outgoing)
             .to_owned();
 
-        let mut entry_block = entry_blocks[0].clone();
+        let mut entry_block = condensed_node[0].clone(); // to initialize the variable
 
         let mut false_outer_blocks = HashMap::<Block, Vec<Block>>::new(); // exit_block -> outer_blocks
+
+        // to handle case where there is no entry block
+        if entry_blocks.is_empty() {
+            entry_blocks.insert(entry_block.leader, entry_block.clone());
+        }
 
         let mut normal_cycle = false;
         // handling case where there are more than one outer block
@@ -73,15 +87,17 @@ pub fn condensate_graph(
                     .iter()
                     .find(|node| node.get_targets().contains(&outer_block.clone().leader))
                 {
-                    for entry in entry_blocks.clone() {
-                        if cycle_block.leader == entry.leader {
+                    let mut remove_flag = false;
+                    for (leader, entry) in entry_blocks.clone() {
+                        if cycle_block.leader == leader {
                             normal_cycle = true;
+                            remove_flag = true;
                             entry_block = entry.clone();
-                            entry_blocks.retain(|x| x.leader != entry.leader);
+                            entry_blocks.remove(&leader);
                             break;
                         }
                     }
-                    if !normal_cycle {
+                    if !remove_flag {
                         false_outer_blocks.insert(cycle_block.clone(), outer_blocks.clone());
                     }
                 }
@@ -102,16 +118,17 @@ pub fn condensate_graph(
                 );
             }
 
-            for entry in entry_blocks.clone() {
+            for entry_leader in entry_blocks.keys() {
                 printwarning!(
                     "We are not considering the entry block 0x{:x} as entry from the cycle 0x{:x}",
-                    entry.leader,
+                    entry_leader,
                     entry_block.leader
                 );
+                // remove the incomings edges of the entry blocks not considered in the WCET calculation
                 for pre_cycle_blocks in &incomings_vec {
                     for block in pre_cycle_blocks {
-                        if block.get_targets().contains(&entry.leader) {
-                            condensed_graph.remove_edge(&pre_cycle_blocks, &condensed_node);
+                        if block.get_targets().contains(entry_leader) {
+                            condensed_graph.remove_edge(pre_cycle_blocks, &condensed_node);
                         }
                     }
                 }
@@ -150,6 +167,8 @@ pub fn condensate_graph(
             );
         }
 
+        // remove the oouter blocks from the condensed graph
+
         let mut max_cycles = 1;
         if let Some(real_entry_address) = fictious_map.get(&entry_block.leader) {
             let env_var_key = format!("CYCLE_0x{real_entry_address:x}");
@@ -186,21 +205,21 @@ pub fn condensate_graph(
             cycle_graph.remove_edge(&source, &target);
         }
 
-        // let graph_dir = crate::GRAPHS_DIR;
+        let graph_dir = crate::GRAPHS_DIR;
 
-        // let digraph = cycle_graph.to_dot_graph();
-        // let graph_number = COUNTER.load(Ordering::Relaxed);
-        // let mut dot_file =
-        //     std::fs::File::create(format!("{graph_dir}/cycle_graph_{graph_number}.dot"))
-        //         .expect("Unable to create file");
-        // dot_file
-        //     .write_all(digraph.as_bytes())
-        //     .expect("Unable to write dot file");
+        let digraph = cycle_graph.to_dot_graph();
+        let graph_number = COUNTER.load(Ordering::Relaxed);
+        let mut dot_file =
+            std::fs::File::create(format!("{graph_dir}/cycle_graph_{graph_number}.dot"))
+                .expect("Unable to create file");
+        dot_file
+            .write_all(digraph.as_bytes())
+            .expect("Unable to write dot file");
 
         let entry_node_latency = entry_block.get_latency();
 
         match cycle_graph.reconstruct_longest_path(
-            &entry_block, //&
+            &entry_block,
             &exit_block,
             entry_node_latency as f32,
             max_cycles,
@@ -266,16 +285,24 @@ pub fn condensate_graph(
 
                 let condensed_cycle_graph_nodes = condensed_cycle_graph.get_nodes();
 
+                let mut condensed_cycle_entry_node = condensed_node.clone();
+
                 let mut entry_nodes = condensed_cycle_graph_nodes
                     .iter()
                     .filter(|node| {
                         condensed_cycle_graph
                             .edges_directed(node, Incoming)
                             .is_empty()
+                            && condensed_graph
+                                .get_nodes()
+                                .iter()
+                                .any(|n| n[0].get_targets().contains(&node[0].leader))
                     })
                     .collect::<Vec<_>>();
 
-                let mut condensed_cycle_entry_node = entry_nodes[0].clone(); // as this is a cycle we are sure that it has only one entry node
+                if !entry_nodes.is_empty() {
+                    condensed_cycle_entry_node = entry_nodes[0].clone();
+                }
 
                 let mut max_cycles = 1;
 
@@ -425,7 +452,7 @@ pub fn condensate_graph(
                     }
 
                     if max_rec_cycles > 0 {
-                        //find the ret/next pattern of a recursive function
+                        //find the return cycle pattern of a inner recursive invocation
                         let mut ret_latency: u64 = 0;
                         for node in condensed_cycle_graph.get_nodes() {
                             if let Some(ExitJump::Ret(_)) = node[0].exit_jump {
@@ -433,19 +460,19 @@ pub fn condensate_graph(
                                     let next_block = condensed_cycle_graph
                                         .neighbors_directed(&node, Outgoing)[0][0]
                                         .clone();
-                                    if let Some(ExitJump::Next(_)) = next_block.exit_jump {
-                                        ret_latency += node[0].get_latency() as u64;
-                                        ret_latency += next_block.get_latency() as u64;
-                                        println!("ret_latency: {}", ret_latency);
-                                        break;
-                                    }
+                                    ret_latency += node[0].get_latency() as u64;
+                                    ret_latency += next_block.get_latency() as u64;
+                                    break;
                                 }
                             }
                         }
 
                         latency_map.insert(
                             current_ret_address,
-                            (cycle_node_latency as u32 - entry_node_latency + ret_latency as u32)
+                            (cycle_node_latency as u32
+                                - entry_node_latency as u32
+                                - ret_latency as u32
+                                + ret_latency as u32 * max_rec_cycles)
                                 * max_rec_cycles,
                         );
                     } else {
@@ -470,14 +497,14 @@ pub fn condensate_graph(
                         .insert(condensed_node[0].leader, condensed_node[0].get_latency());
                 }
 
-                // let digraph = condensed_cycle_graph.to_dot_graph();
-                // let mut dot_file = std::fs::File::create(format!(
-                //     "{graph_dir}/condensed_cycle_graph_{graph_number}.dot"
-                // ))
-                // .expect("Unable to create file");
-                // dot_file
-                //     .write_all(digraph.as_bytes())
-                //     .expect("Unable to write dot file");
+                let digraph = condensed_cycle_graph.to_dot_graph();
+                let mut dot_file = std::fs::File::create(format!(
+                    "{graph_dir}/condensed_cycle_graph_{graph_number}.dot"
+                ))
+                .expect("Unable to create file");
+                dot_file
+                    .write_all(digraph.as_bytes())
+                    .expect("Unable to write dot file");
             }
         }
     }
