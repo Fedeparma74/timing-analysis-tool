@@ -67,7 +67,7 @@ fn main() {
     let mut file = std::fs::File::create("instructions.txt").unwrap();
 
     for instruction in instructions.iter() {
-        writeln!(file, "{}", instruction).unwrap();
+        writeln!(file, "{instruction}").unwrap();
     }
 
     let wcet = calculate_wcet(&cs, &arch_mode, &instructions);
